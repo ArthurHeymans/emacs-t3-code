@@ -1,0 +1,54 @@
+#+title: t3-code.el
+
+An Emacs client for the T3 Code server.
+
+* Status
+
+This repository currently implements the approved M0 foundation:
+
+- versioned NDJSON bridge protocol
+- one shared process and state store per environment
+- request correlation and explicit cancellation
+- reference-counted subscriptions
+- connection generation and sequence repair
+- bounded malformed-input and stderr handling
+- explicit rejection of SSH/TRAMP environments until the remote milestone
+- deterministic fake bridge and ERT integration tests
+- a read-only =tabulated-list-mode= dashboard with active/settled distinction
+- a live thread viewer for messages, plans, tools, approvals, and agent activity
+- multiline message composition and a transient command menu for thread mutations
+
+The matching T3 implementation now provides the bridge as =t3 client --stdio=, keeping the private contracts and client runtime inside the versioned T3 bundle. The current slice supports authenticated local/direct bearer connections, the live shell dashboard, normalized live thread projections, and normalized thread mutations. SSH, relay/DPoP, and credential persistence remain later milestones.
+
+* Demo
+
+Add this checkout to =load-path= and run:
+
+#+begin_src emacs-lisp
+(require 't3-code)
+(t3-code-demo)
+#+end_src
+
+The demo starts =bridge/fake-t3e.mjs= with Node and opens a deterministic dashboard. Ordinary =M-x t3-code= expects a =t3= build containing =t3 client --stdio= in =exec-path=.
+
+For the current authentication spike, start Emacs with either =T3_CLIENT_PAIRING_TOKEN= set to a fresh one-time token or =T3_CLIENT_ACCESS_TOKEN= set to a bearer token. The bridge removes the credential from its own environment after reading it. Auth-source persistence and interactive pairing belong to the authentication milestone.
+
+The dashboard groups settled threads under a =Settled (N)= menu at the bottom. The menu starts expanded; press =RET= or =TAB= on it, or =s= anywhere, to collapse or expand it. Set =t3-code-dashboard-collapse-settled= non-nil to start new dashboards with the menu collapsed.
+
+Delegated subagent threads are placed directly below their parent under an =Agents (N)= menu with a small one-column indent. Agent menus start collapsed; press =RET= or =TAB= on one to inspect its children. Orphaned agent threads whose parent is not in the live shell stay hidden. Status dots and colors follow T3's visual hierarchy: sky for working, amber for approvals, red for failures, and muted text for idle/settled rows.
+
+Press =RET= on a thread row to open its live timeline. The viewer presents normalized user/assistant text, plans, approvals, file and command activity, checkpoints, handoffs, and subagents. Reasoning and potentially large tool details start collapsed; use =TAB= or =RET= on an item to toggle them. Arbitrary dynamic-tool input and output remain hidden at the bridge boundary because they may contain credentials.
+
+Press =m= to compose a multiline message, then =C-c C-c= to send or =C-c C-k= to cancel. Press =a= or =.= for the transient action menu. It provides automatic send, queue, steer, interrupt/restart, approval responses, runtime and interaction modes, settle/reactivate, snooze controls, worktree/VC views, and ID copying. Message sends preserve the thread's current runtime mode; =full-access= remains the default for threads without projected mode data.
+
+* Development
+
+#+begin_src sh
+make check
+#+end_src
+
+See [[file:docs/protocol-v1.md][the protocol v1 specification]].
+
+* Compatibility policy
+
+The bridge handshake reports its own version, pinned T3 revision, server version, environment identity, and discovered capabilities. Emacs never decodes raw Effect RPC or raw T3 schemas. Unsupported capabilities remain hidden rather than inferred from a package version.

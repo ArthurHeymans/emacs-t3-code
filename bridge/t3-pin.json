@@ -1,0 +1,7 @@
+{
+  "t3Revision": "7441f732709f8f4d7f83f11c57d94205807a094a",
+  "t3PackageVersion": "0.0.33",
+  "effectVersion": "4.0.0-beta.103",
+  "status": "compatibility-spike-only",
+  "notes": "Clean baseline inspected for M0. Production t3e bundling is blocked until a bridge entry point and released-server compatibility tests exist. Do not build releases from adjacent dirty workspaces."
+}
