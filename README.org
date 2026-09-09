@@ -4,7 +4,7 @@ An Emacs client for the T3 Code server.
 
 * Status
 
-This repository currently implements the approved M0 foundation:
+This repository implements the shared bridge foundation and a sectioned Emacs workspace:
 
 - versioned NDJSON bridge protocol
 - one shared process and state store per environment
@@ -15,8 +15,9 @@ This repository currently implements the approved M0 foundation:
 - explicit rejection of SSH/TRAMP environments until the remote milestone
 - deterministic fake bridge and ERT integration tests
 - a read-only =tabulated-list-mode= dashboard with active/settled distinction
-- a live thread viewer for messages, plans, tools, approvals, and agent activity
-- multiline message composition and a transient command menu for thread mutations
+- a sectioned live transcript with turn/work/item folding and an attention index
+- stable reading positions across streaming updates and per-window follow
+- a persistent multiline composer, prompt history, and a transient action menu
 
 The matching T3 implementation now provides the bridge as =t3 client --stdio=, keeping the private contracts and client runtime inside the versioned T3 bundle. The current slice supports authenticated local/direct bearer connections, the live shell dashboard, normalized live thread projections, and normalized thread mutations. SSH, relay/DPoP, and credential persistence remain later milestones.
 
@@ -33,13 +34,35 @@ The demo starts =bridge/fake-t3e.mjs= with Node and opens a deterministic dashbo
 
 For the current authentication spike, start Emacs with either =T3_CLIENT_PAIRING_TOKEN= set to a fresh one-time token or =T3_CLIENT_ACCESS_TOKEN= set to a bearer token. The bridge removes the credential from its own environment after reading it. Auth-source persistence and interactive pairing belong to the authentication milestone.
 
-The dashboard groups settled threads under a =Settled (N)= menu at the bottom. The menu starts expanded; press =RET= or =TAB= on it, or =s= anywhere, to collapse or expand it. Set =t3-code-dashboard-collapse-settled= non-nil to start new dashboards with the menu collapsed.
+The dashboard groups settled threads under a =Settled (N)= menu at the bottom. It starts collapsed; press =RET= or =TAB= on it, or =s= anywhere, to toggle it. Set =t3-code-dashboard-collapse-settled= to nil to start expanded.
 
 Delegated subagent threads are placed directly below their parent under an =Agents (N)= menu with a small one-column indent. Agent menus start collapsed; press =RET= or =TAB= on one to inspect its children. Orphaned agent threads whose parent is not in the live shell stay hidden. Status dots and colors follow T3's visual hierarchy: sky for working, amber for approvals, red for failures, and muted text for idle/settled rows.
 
-Press =RET= on a thread row to open its live timeline. The viewer presents normalized user/assistant text, plans, approvals, file and command activity, checkpoints, handoffs, and subagents. Reasoning and potentially large tool details start collapsed; use =TAB= or =RET= on an item to toggle them. Arbitrary dynamic-tool input and output remain hidden at the bridge boundary because they may contain credentials.
+Press =RET= on a thread row to open its transcript and a small input window below it. Normal =display-buffer-alist= rules can override the layout. The thread opens following the latest output; reading history disarms follow, and =G= resumes it for that window. Streaming updates preserve item-relative point and window starts rather than erasing the transcript.
 
-Press =m= to compose a multiline message, then =C-c C-c= to send or =C-c C-k= to cancel. Press =a= or =.= for the transient action menu. It provides automatic send, queue, steer, interrupt/restart, approval responses, runtime and interaction modes, settle/reactivate, snooze controls, worktree/VC views, and ID copying. Message sends preserve the thread's current runtime mode; =full-access= remains the default for threads without projected mode data.
+With a bridge advertising =threadSections=, each run has a foldable turn heading. User messages and assistant answers stay visible; tools, reasoning, commands and other activity start under a folded =Work= section. Completed assistant commentary is folded, while active or interrupted assistant output stays readable. Older bridges still provide foldable individual items, without guessed turn boundaries.
+
+| Transcript key | Action |
+|----------------+-----------------------------------------------|
+| =TAB= / =RET= | Toggle the item, work group or turn at point |
+| =S-TAB= | Switch Conversation / Outline |
+| =n= / =p= | Next / previous loaded turn |
+| =M-g i= | Imenu index of loaded turns |
+| =C-s= | Search loaded text, including folded bodies |
+| =G= | Jump to latest and resume follow |
+| =M-w= | Copy visible region text |
+| =C-u M-w= | Copy region including folded text |
+| =m= | Focus the existing input draft |
+| =q= | Hide this frame's thread/input windows |
+| =.= / =a= | Thread actions |
+
+Manual fold choices survive streaming, completion and reconnect. Pending approvals, input requests and failures have an attention index outside folded history; =RET= on an index entry reveals its item without performing an action. A matching bridge also reports the total pending request count and up to 20 request details outside the recent-history window. Missing request details are not invented. User-input response support is still a later protocol feature.
+
+The input buffer is an ordinary editable text buffer, reused per environment/thread. =C-c C-c= sends using the displayed dispatch mode, =C-c C-s= steers, and =C-c C-q= queues. Auto may start, steer or queue according to server state. =M-p= / =M-n= recall sent prompts and restore the draft. Acceptance clears only an unchanged draft; edits made during a send and failed sends are retained. =C-c C-k= now hides the composer without deleting its draft. Restart asks for confirmation. Drafts and fold choices last for the buffer lifetime, not across Emacs restarts.
+
+The transient provides interrupt, approval responses, runtime and interaction modes, settle/reactivate, snooze controls, worktree/VC views, and ID copying. Message sends preserve the thread's current runtime mode; =full-access= is the display fallback for threads without projected policy data. Hiding or killing a view never stops server work; killing releases that view's subscription.
+
+The bridge still supplies a bounded recent timeline, not full history. Search and Outline cover only loaded content. Older-history loading, process-resource controls and terminal streams remain later milestones. Command output can be inspected inside Work, but is not a live terminal. Arbitrary dynamic-tool input/output remains omitted at the bridge boundary because it may contain credentials.
 
 * Development
 

@@ -12,7 +12,7 @@
 (require 't3-code-core)
 (require 't3-code-thread)
 
-(defcustom t3-code-dashboard-collapse-settled nil
+(defcustom t3-code-dashboard-collapse-settled t
   "Whether new dashboards initially hide settled threads."
   :type 'boolean
   :group 't3-code)

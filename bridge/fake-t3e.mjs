@@ -134,6 +134,17 @@ const threadPayload = {
   truncated: false,
 };
 
+// Mirror optional section metadata from the version-matched production bridge.
+threadPayload.items = threadPayload.items.map((item) => ({
+  ...item,
+  runId: "run-doh-1",
+  runStatus: "waiting",
+  runOrdinal: 1,
+  presentation: "message",
+}));
+threadPayload.pendingRequestCount = 1;
+threadPayload.attention = threadPayload.items.filter((item) => item.type === "approval_request");
+
 const subscriptionPayload = (subscription) => {
   if (subscription.stream === "shell") return shellPayload;
   if (subscription.stream === "thread" && subscription.identity === "thread-doh") {
@@ -197,6 +208,7 @@ rl.on("line", (line) => {
           shell: true,
           threads: true,
           mutations: true,
+          threadSections: true,
           terminal: false,
         },
       });

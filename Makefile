@@ -1,5 +1,5 @@
 EMACS ?= emacs
-ELFILES := t3-code-core.el t3-code-thread.el t3-code-dashboard.el t3-code.el
+ELFILES := t3-code-core.el t3-code-render.el t3-code-thread.el t3-code-dashboard.el t3-code.el
 TESTFILES := test/t3-code-core-test.el test/t3-code-thread-test.el test/t3-code-dashboard-test.el test/t3-code-integration-test.el
 
 .PHONY: check test compile clean
