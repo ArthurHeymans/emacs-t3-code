@@ -105,7 +105,17 @@
                           'face 't3-code-dashboard-settled-face)
               (if t3-code-dashboard--shell-truncated
                   (propertize "  ⚠ truncated" 'face 'warning)
-                "")))))
+                "")
+              (when (eq state 'disconnected)
+                (when-let* ((fatal (t3-code-environment-fatal-error
+                                    t3-code-dashboard--environment))
+                            (reason (plist-get fatal :message)))
+                  (concat "  · "
+                          (propertize
+                           (truncate-string-to-width
+                            (replace-regexp-in-string "[[:cntrl:]]+" " " reason)
+                            160 nil nil "…")
+                           'face 'error))))))))
 
 (defun t3-code-dashboard--status (status)
   "Return a colored status-dot display for thread STATUS."

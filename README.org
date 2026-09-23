@@ -32,7 +32,18 @@ Add this checkout to =load-path= and run:
 
 The demo starts =bridge/fake-t3e.mjs= with Node and opens a deterministic dashboard. Ordinary =M-x t3-code= expects a =t3= build containing =t3 client --stdio= in =exec-path=.
 
-For the current authentication spike, start Emacs with either =T3_CLIENT_PAIRING_TOKEN= set to a fresh one-time token or =T3_CLIENT_ACCESS_TOKEN= set to a bearer token. The bridge removes the credential from its own environment after reading it. Auth-source persistence and interactive pairing belong to the authentication milestone.
+To use the adjacent source checkout rather than an older installed =t3= binary, configure the version-matched bridge before connecting:
+
+#+begin_src emacs-lisp
+(setq t3-code-bridge-command
+      (list "node" (expand-file-name "../t3code/apps/server/src/bin.ts"
+                                     "/path/to/emacs-t3-code/")
+            "client" "--stdio"))
+#+end_src
+
+Replace =/path/to/emacs-t3-code/= with this checkout's absolute path. Use the same T3 checkout/build as the server; the historical =bridge/t3-pin.json= records the original compatibility spike, not the current source checkout. Run =make check-t3code= to test the adjacent bridge's projections and exercise its real stdio startup from Emacs (set =T3CODE_DIR= if it is elsewhere). This gate does not replace an authenticated live-server test.
+
+Start Emacs with either =T3_CLIENT_PAIRING_TOKEN= set to a fresh one-time token or =T3_CLIENT_ACCESS_TOKEN= set to a bearer token. The bridge removes the credential from its own environment after reading it. Auth-source persistence and interactive pairing belong to the authentication milestone. If the bridge rejects the endpoint or credentials, the dashboard displays the fatal reason in its header; =g= reconnects after correcting the configuration.
 
 The dashboard groups settled threads under a =Settled (N)= menu at the bottom. It starts collapsed; press =RET= or =TAB= on it, or =s= anywhere, to toggle it. Set =t3-code-dashboard-collapse-settled= to nil to start expanded.
 

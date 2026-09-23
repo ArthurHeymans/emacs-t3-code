@@ -52,7 +52,7 @@ bridge included in the repository."
   capabilities server-version bridge-version pinned-t3-version
   (pending (make-hash-table :test #'equal))
   (subscriptions (make-hash-table :test #'equal))
-  (next-id 0) outbound-queue diagnostics exit-error)
+  (next-id 0) outbound-queue diagnostics exit-error fatal-error)
 
 (cl-defstruct (t3-code-subscription
                (:constructor t3-code-subscription-create))
@@ -271,6 +271,9 @@ DIRECTORY controls where the bridge starts.  M0 accepts local directories only."
              (t3-code--set-state environment (intern phase)))
          (t3-code--diagnose environment "Unknown bridge state phase: %S" phase))))
     ("fatal"
+     (setf (t3-code-environment-fatal-error environment)
+           (list :code (plist-get message :code)
+                 :message (plist-get message :message)))
      (t3-code--diagnose environment "Bridge fatal%s: %s%s"
                         (if-let* ((code (plist-get message :code)))
                             (format " [%s]" code) "")
@@ -435,7 +438,8 @@ Omit resume state when WITHOUT-RESUME is non-nil."
             (setf (t3-code-environment-process environment) process
                   (t3-code-environment-generation environment)
                   (1+ (t3-code-environment-generation environment))
-                  (t3-code-environment-exit-error environment) nil)
+                  (t3-code-environment-exit-error environment) nil
+                  (t3-code-environment-fatal-error environment) nil)
             (t3-code--set-state environment 'connecting)
             (t3-code--send-now
              environment

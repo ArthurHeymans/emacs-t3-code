@@ -144,5 +144,24 @@
                       (t3-code-environment-subscriptions environment)) 0)))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
+(ert-deftest t3-code-test-dashboard-shows-bridge-fatal-reason ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (let ((environment (t3-code-environment-create
+                        :id "test" :endpoint "http://127.0.0.1:3773"
+                        :state 'disconnected
+                        :fatal-error '(:code "authentication-required"
+                                       :message "Set T3_CLIENT_PAIRING_TOKEN"))))
+      (setq t3-code-dashboard--environment environment)
+      (should (string-match-p "Set T3_CLIENT_PAIRING_TOKEN"
+                              (t3-code-dashboard--header-line)))
+      (t3-code--dispatch environment
+                         '(:kind "fatal" :code "protocol-mismatch"
+                           :message "Update the bridge"))
+      (should (equal (plist-get (t3-code-environment-fatal-error environment) :code)
+                     "protocol-mismatch"))
+      (should (string-match-p "Update the bridge"
+                              (t3-code-dashboard--header-line))))))
+
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here

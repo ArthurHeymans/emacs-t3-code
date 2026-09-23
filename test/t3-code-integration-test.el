@@ -174,5 +174,28 @@
                       (t3-code-environment-pending environment)) 0)))
       (t3-code-disconnect environment))))
 
+(ert-deftest t3-code-test-adjacent-t3code-bridge-speaks-protocol-v1 ()
+  "Exercise the real checkout's bridge, not only the fake protocol fixture."
+  (let* ((checkout (getenv "T3CODE_DIR"))
+         (entry (and checkout (expand-file-name "apps/server/src/bin.ts" checkout))))
+    (skip-unless (and (executable-find "node") entry (file-exists-p entry)))
+    (let* ((process-environment (append '("T3_CLIENT_ACCESS_TOKEN="
+                                          "T3_CLIENT_PAIRING_TOKEN=")
+                                        process-environment))
+           (t3-code-bridge-command (list "node" entry "client" "--stdio"))
+           (environment (t3-code-environment-create
+                         :id "checkout-smoke" :endpoint "http://127.0.0.1:1"
+                         :directory checkout)))
+      (unwind-protect
+          (progn
+            (t3-code-connect environment)
+            (should (t3-code-test--wait-until
+                     (lambda () (eq (t3-code-environment-state environment)
+                                    'disconnected)) 15))
+            (should (equal (plist-get (t3-code-environment-fatal-error environment)
+                                      :code)
+                           "environment-unreachable")))
+        (t3-code-disconnect environment)))))
+
 (provide 't3-code-integration-test)
 ;;; t3-code-integration-test.el ends here
