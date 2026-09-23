@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 't3-code-core)
+(require 't3-code)
 
 (defconst t3-code-test--root
   (file-name-directory (directory-file-name
@@ -196,6 +197,59 @@
                                       :code)
                            "environment-unreachable")))
         (t3-code-disconnect environment)))))
+
+(ert-deftest t3-code-test-connect-prompt-scopes-credentials-to-bridge ()
+  (let ((t3-code--environments (make-hash-table :test #'equal))
+        (process-environment (append '("T3_CLIENT_ACCESS_TOKEN=ambient-access"
+                                       "T3_CLIENT_PAIRING_TOKEN=ambient-pairing")
+                                     process-environment))
+        observed)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _) "https://localhost:3773"))
+              ((symbol-function 'read-passwd)
+               (lambda (&rest _) "fresh-secret"))
+              ((symbol-function 't3-code-restart)
+               (lambda (environment credential)
+                 (push (list (t3-code-environment-endpoint environment)
+                             credential
+                             (getenv "T3_CLIENT_ACCESS_TOKEN")
+                             (getenv "T3_CLIENT_PAIRING_TOKEN"))
+                       observed)))
+              ((symbol-function 't3-code-dashboard) #'ignore))
+      (t3-code-connect-prompt)
+      (t3-code-connect-prompt t))
+    (should (equal (nreverse observed)
+                   '(("https://localhost:3773" (pairing . "fresh-secret")
+                      "ambient-access" "ambient-pairing")
+                     ("https://localhost:3773" (bearer . "fresh-secret")
+                      "ambient-access" "ambient-pairing"))))
+    (should (equal (getenv "T3_CLIENT_ACCESS_TOKEN") "ambient-access"))
+    (should (equal (getenv "T3_CLIENT_PAIRING_TOKEN") "ambient-pairing"))))
+
+(ert-deftest t3-code-test-connect-credential-only-at-process-spawn ()
+  (let ((process-environment (append '("T3_CLIENT_ACCESS_TOKEN=ambient-access"
+                                       "T3_CLIENT_PAIRING_TOKEN=ambient-pairing")
+                                     process-environment))
+        (environment (t3-code-test--environment "credential"))
+        observed)
+    (dolist (credential '((pairing . "temporary") (bearer . "temporary")))
+      (cl-letf (((symbol-function 'make-process)
+                 (lambda (&rest _)
+                   (push (list (getenv "T3_CLIENT_ACCESS_TOKEN")
+                               (getenv "T3_CLIENT_PAIRING_TOKEN")) observed)
+                   (error "Stop before starting the test process"))))
+        (should-error (t3-code-connect environment credential)))
+      (should (equal (getenv "T3_CLIENT_ACCESS_TOKEN") "ambient-access"))
+      (should (equal (getenv "T3_CLIENT_PAIRING_TOKEN") "ambient-pairing")))
+    (should (equal (nreverse observed)
+                   '(("" "temporary") ("temporary" ""))))))
+
+(ert-deftest t3-code-test-connect-prompt-rejects-credentialed-url ()
+  (cl-letf (((symbol-function 'read-string)
+             (lambda (&rest _) "https://user:secret@localhost:3773"))
+            ((symbol-function 'read-passwd)
+             (lambda (&rest _) (ert-fail "Must reject URL before prompting for token"))))
+    (should-error (t3-code-connect-prompt) :type 'user-error)))
 
 (provide 't3-code-integration-test)
 ;;; t3-code-integration-test.el ends here

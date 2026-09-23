@@ -411,8 +411,10 @@ Omit resume state when WITHOUT-RESUME is non-nil."
              (t3-code--diagnose environment "Subscription callback failed: %s"
                                 (error-message-string error))))))))))
 
-(defun t3-code-connect (environment)
-  "Start ENVIRONMENT's bridge and initiate the protocol handshake."
+(defun t3-code-connect (environment &optional credential)
+  "Start ENVIRONMENT's bridge and initiate the protocol handshake.
+CREDENTIAL, when non-nil, is (TYPE . TOKEN), where TYPE is `pairing' or
+`bearer'.  Only the bridge process inherits it; no token is retained."
   (unless (process-live-p (t3-code-environment-process environment))
     (unless (and (listp t3-code-bridge-command) t3-code-bridge-command)
       (user-error "`t3-code-bridge-command' is not configured"))
@@ -425,11 +427,22 @@ Omit resume state when WITHOUT-RESUME is non-nil."
       (condition-case error
           (progn
             (setq process
-                  (make-process :name (format "t3e:%s" (t3-code-environment-id environment))
-                                :command command :connection-type 'pipe :noquery t
-                                :file-handler t :stderr stderr-buffer
-                                :filter #'t3-code--process-filter
-                                :sentinel #'t3-code--process-sentinel))
+                  (let ((process-environment
+                         (if credential
+                             (append (if (eq (car credential) 'bearer)
+                                         (list (concat "T3_CLIENT_ACCESS_TOKEN="
+                                                       (cdr credential))
+                                               "T3_CLIENT_PAIRING_TOKEN=")
+                                       (list "T3_CLIENT_ACCESS_TOKEN="
+                                             (concat "T3_CLIENT_PAIRING_TOKEN="
+                                                     (cdr credential))))
+                                     process-environment)
+                           process-environment)))
+                    (make-process :name (format "t3e:%s" (t3-code-environment-id environment))
+                                  :command command :connection-type 'pipe :noquery t
+                                  :file-handler t :stderr stderr-buffer
+                                  :filter #'t3-code--process-filter
+                                  :sentinel #'t3-code--process-sentinel)))
             (process-put process 't3-code-environment environment)
             (process-put process 't3-code-stderr-buffer stderr-buffer)
             (when-let* ((stderr-process (get-buffer-process stderr-buffer)))
@@ -461,10 +474,11 @@ Omit resume state when WITHOUT-RESUME is non-nil."
     (delete-process process))
   environment)
 
-(defun t3-code-restart (environment)
-  "Restart ENVIRONMENT and resume its subscriptions by sequence."
+(defun t3-code-restart (environment &optional credential)
+  "Restart ENVIRONMENT and resume its subscriptions by sequence.
+Pass CREDENTIAL only to the new bridge process, as in `t3-code-connect'."
   (t3-code-disconnect environment)
-  (t3-code-connect environment)
+  (t3-code-connect environment credential)
   (maphash (lambda (_id subscription)
              (t3-code--send environment
                             (t3-code--subscription-record subscription)))
