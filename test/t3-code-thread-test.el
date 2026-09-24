@@ -86,6 +86,31 @@
     (should (string-match-p "Could not load thread" (buffer-string)))
     (should (string-match-p "safe failure" (buffer-string)))))
 
+(ert-deftest t3-code-test-thread-retains-last-good-snapshot-on-stream-error ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (let ((good '(:thread (:id "thread-1" :title "Example")
+                  :items ((:id "answer" :type "assistant_message"
+                           :label "Assistant" :text "Still here"))))
+          (failure '(:thread nil :items nil :error "SocketCloseError: 1005")))
+      (t3-code-thread--receive (list :kind "snapshot" :payload failure))
+      (should (string-match-p "Could not load thread" (buffer-string)))
+      (let ((tick (buffer-chars-modified-tick)))
+        (t3-code-thread--receive (list :kind "snapshot" :payload failure))
+        (should (= tick (buffer-chars-modified-tick))))
+      (t3-code-thread--receive (list :kind "snapshot" :payload good))
+      (should (string-match-p "Still here" (buffer-string)))
+      (should (string-match-p "retrying" (buffer-string)))
+      (t3-code-thread--receive (list :kind "snapshot" :payload failure))
+      (should (equal (plist-get t3-code-thread--payload :items)
+                     (plist-get good :items)))
+      (let ((tick (buffer-chars-modified-tick)))
+        (t3-code-thread--receive (list :kind "snapshot" :payload failure))
+        (should (= tick (buffer-chars-modified-tick))))
+      (t3-code-thread--receive '(:kind "synchronized"))
+      (should-not (string-match-p "retrying" (buffer-string)))
+      (should (string-match-p "Still here" (buffer-string))))))
+
 (defun t3-code-test--section-payload ()
   "Return a fresh grouped thread fixture."
   (copy-tree

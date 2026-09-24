@@ -592,6 +592,26 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (visual-line-mode 1)
   (add-hook 'kill-buffer-hook #'t3-code-thread--cleanup nil t))
 
+(defun t3-code-thread--receive (message)
+  "Apply a thread subscription MESSAGE without discarding the last good view.
+A retrying bridge may emit an error snapshot between successful snapshots;
+only synchronization proves that its stream has recovered."
+  (let* ((kind (plist-get message :kind))
+         (payload (plist-get message :payload))
+         (error-text (and payload (plist-get payload :error))))
+    (cond
+     (error-text
+      (setq t3-code-thread--stream-error error-text)
+      (unless (plist-get t3-code-thread--payload :thread)
+        (setq t3-code-thread--payload payload)))
+     ((member kind '("snapshot" "event"))
+      (setq t3-code-thread--payload payload))
+     ((equal kind "synchronized")
+      (setq t3-code-thread--stream-error nil)))
+    (when (or (not (equal t3-code-thread--payload t3-code-thread--rendered-payload))
+              (not (equal t3-code-thread--stream-error t3-code-thread--rendered-error)))
+      (t3-code-thread--refresh))))
+
 (defun t3-code-thread-open (environment thread)
   "Open normalized THREAD from ENVIRONMENT in a live viewer."
   (let* ((thread-id (plist-get thread :id))
@@ -611,9 +631,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
                (lambda (message)
                  (when (buffer-live-p buffer)
                    (with-current-buffer buffer
-                     (when (member (plist-get message :kind) '("snapshot" "event"))
-                       (setq t3-code-thread--payload (plist-get message :payload))
-                       (t3-code-thread--refresh))))))))
+                     (t3-code-thread--receive message)))))))
       (t3-code-thread--refresh))
     (pop-to-buffer buffer)
     (with-current-buffer buffer

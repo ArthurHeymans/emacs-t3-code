@@ -21,6 +21,8 @@
 (defvar-local t3-code-thread--fold-overlays nil)
 (defvar-local t3-code-thread--view 'conversation)
 (defvar-local t3-code-thread--rendered-payload nil)
+(defvar-local t3-code-thread--stream-error nil)
+(defvar-local t3-code-thread--rendered-error nil)
 (defvar-local t3-code-thread--unseen 0)
 
 (declare-function t3-code-thread--item-face "t3-code-thread" (type))
@@ -162,6 +164,9 @@
                        "Thread unavailable: disconnected. Press g to reconnect.\n"
                      "Loading thread…\n"))
                   ((plist-get payload :error) (concat "Could not load thread\n" (plist-get payload :error) "\n"))
+                  (t3-code-thread--stream-error
+                   (concat "Live updates interrupted (retrying): "
+                           t3-code-thread--stream-error "\n"))
                   ((eq (plist-get payload :deleted) t) "This thread was deleted.\n")
                   ((eq (plist-get payload :truncated) t)
                    "History incomplete: showing the recent bounded timeline.\n")))
@@ -300,6 +305,7 @@
         (setq t3-code-thread--rendered-payload (copy-tree t3-code-thread--payload)
               t3-code-thread--unseen (if (seq-some (lambda (entry) (nth 3 entry)) windows)
                                          0 (1+ t3-code-thread--unseen))))
+      (setq t3-code-thread--rendered-error t3-code-thread--stream-error)
       (setq imenu--index-alist nil)
       (set-buffer-modified-p nil)
       (force-mode-line-update))))
