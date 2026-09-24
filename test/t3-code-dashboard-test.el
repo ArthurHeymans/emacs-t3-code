@@ -163,5 +163,19 @@
       (should (string-match-p "Update the bridge"
                               (t3-code-dashboard--header-line))))))
 
+(ert-deftest t3-code-test-dashboard-reconnect-uses-token-setting ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (let ((t3-code-token "configured-token")
+          (t3-code-token-type 'bearer)
+          (t3-code-dashboard--environment
+           (t3-code-environment-create :id "test" :endpoint "http://localhost:3773"))
+          credential)
+      (cl-letf (((symbol-function 't3-code-restart)
+                 (lambda (_environment &optional supplied)
+                   (setq credential supplied))))
+        (t3-code-dashboard-reconnect))
+      (should (equal credential '(bearer . "configured-token"))))))
+
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here

@@ -336,10 +336,13 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
   (t3-code-dashboard--refresh)
   (force-mode-line-update t))
 
+(declare-function t3-code--reconnect "t3-code" (environment))
+
 (defun t3-code-dashboard-reconnect ()
   "Restart the current dashboard's environment bridge."
   (interactive)
-  (t3-code-restart t3-code-dashboard--environment))
+  (require 't3-code)
+  (t3-code--reconnect t3-code-dashboard--environment))
 
 (defun t3-code-dashboard-quit ()
   "Kill the dashboard, releasing only its shell subscription."

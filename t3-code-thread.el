@@ -518,10 +518,13 @@ Keep the input buffer and preserve edits made while acceptance is pending."
     ("c" "Copy thread ID" t3-code-thread-copy-thread-id)
     ("C" "Copy run ID" t3-code-thread-copy-run-id)]])
 
+(declare-function t3-code--reconnect "t3-code" (environment))
+
 (defun t3-code-thread-reconnect ()
   "Reconnect the shared environment used by this thread."
   (interactive)
-  (t3-code-restart t3-code-thread--environment))
+  (require 't3-code)
+  (t3-code--reconnect t3-code-thread--environment))
 
 (defun t3-code-thread-quit ()
   "Hide this frame's thread and input windows without stopping work."

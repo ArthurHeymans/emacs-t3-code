@@ -23,12 +23,46 @@
   :type 'string
   :group 't3-code)
 
+(defcustom t3-code-token 'ask
+  "Token to give the bridge when connecting.
+`ask' prompts securely each time a bridge is started; a string uses that
+value.  Nil inherits credentials from Emacs's process environment instead.
+A configured string can be persisted by Customize, so treat it as a secret."
+  :type '(choice (const :tag "Ask on connect" ask)
+                 (string :tag "Token (stored in Emacs configuration)")
+                 (const :tag "Use process environment" nil))
+  :group 't3-code)
+
+(defcustom t3-code-token-type 'pairing
+  "Type of `t3-code-token': one-time pairing or reusable bearer token."
+  :type '(choice (const :tag "Pairing" pairing)
+                 (const :tag "Bearer" bearer))
+  :group 't3-code)
+
+(defun t3-code--configured-credential ()
+  "Resolve the configured token for a new bridge process."
+  (when t3-code-token
+    (let ((token (if (eq t3-code-token 'ask)
+                     (read-passwd (if (eq t3-code-token-type 'bearer)
+                                      "T3 bearer token: " "T3 pairing token: "))
+                   t3-code-token)))
+      (unless (and (stringp token) (not (string-empty-p token)))
+        (user-error "T3 token cannot be empty"))
+      (cons t3-code-token-type token))))
+
+(defun t3-code--reconnect (environment)
+  "Restart ENVIRONMENT with the configured authentication setting."
+  (t3-code-restart environment (t3-code--configured-credential)))
+
 (defun t3-code (&optional endpoint)
-  "Open the T3 dashboard for ENDPOINT."
+  "Open the T3 dashboard for ENDPOINT.
+Ask for a token on connect unless `t3-code-token' specifies one or uses the
+environment.  Reopening an already-connected dashboard does not prompt."
   (interactive)
   (let* ((endpoint (or endpoint t3-code-default-endpoint))
          (environment (t3-code-get-environment endpoint endpoint default-directory)))
-    (t3-code-connect environment)
+    (unless (process-live-p (t3-code-environment-process environment))
+      (t3-code--reconnect environment))
     (t3-code-dashboard environment)))
 
 (defun t3-code-connect-prompt (&optional bearer)
@@ -59,6 +93,7 @@ environment or the T3 environment state.  Reconnecting requires a new token."
   (let* ((root (file-name-directory (or load-file-name
                                         (locate-library "t3-code")
                                         buffer-file-name)))
+         (t3-code-token nil)
          (t3-code-bridge-command
           (list "node" (expand-file-name "bridge/fake-t3e.mjs" root))))
     (t3-code "fake://demo")))
