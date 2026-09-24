@@ -75,6 +75,9 @@
 (defvar-local t3-code-dashboard--subscription nil)
 (defvar-local t3-code-dashboard--projects nil)
 (defvar-local t3-code-dashboard--shell-truncated nil)
+(defvar-local t3-code-dashboard--omitted-settled-count nil)
+(defvar-local t3-code-dashboard--omitted-other-count nil)
+(defvar-local t3-code-dashboard--omitted-project-count nil)
 (defvar-local t3-code-dashboard--settled-collapsed nil)
 (defvar-local t3-code-dashboard--expanded-agents nil)
 
@@ -104,7 +107,12 @@
               (propertize (if t3-code-dashboard--settled-collapsed "hidden" "shown")
                           'face 't3-code-dashboard-settled-face)
               (if t3-code-dashboard--shell-truncated
-                  (propertize "  ⚠ truncated" 'face 'warning)
+                  (propertize
+                   (if (t3-code-dashboard--settled-only-omission-p)
+                       (format "  ⚠ %d older settled omitted"
+                               t3-code-dashboard--omitted-settled-count)
+                     "  ⚠ truncated")
+                   'face 'warning)
                 "")
               (when (eq state 'disconnected)
                 (when-let* ((fatal (t3-code-environment-fatal-error
@@ -164,9 +172,9 @@
   "Return non-nil when ID identifies an agents menu."
   (and (consp id) (eq (car id) t3-code-dashboard--agents-heading-tag)))
 
-(defun t3-code-dashboard--agents-heading-entry (parent-id count depth)
-  "Create the agents menu below PARENT-ID for COUNT children at DEPTH."
-  (let ((expanded (gethash parent-id t3-code-dashboard--expanded-agents)))
+(defun t3-code-dashboard--agents-heading-entry (parent-id count depth children)
+  "Create the agents menu below PARENT-ID for COUNT CHILDREN at DEPTH."
+  (let ((expanded (t3-code-dashboard--agents-open-p parent-id children)))
     (list (t3-code-dashboard--agents-heading-id parent-id)
           (vector
            "" "" ""
@@ -178,28 +186,64 @@
             'help-echo "RET: collapse/expand delegated agents")
            "" "" "" ""))))
 
+(defun t3-code-dashboard--working-p (thread)
+  "Whether THREAD is currently running or awaiting approval."
+  (member (plist-get thread :status) '("running" "waiting-approval")))
+
+(defun t3-code-dashboard--working-descendant-p (thread children &optional seen)
+  "Whether THREAD has a working child in CHILDREN, avoiding cycles via SEEN."
+  (let ((id (plist-get thread :id)))
+    (unless (member id seen)
+      (seq-some (lambda (child)
+                  (or (t3-code-dashboard--working-p child)
+                      (t3-code-dashboard--working-descendant-p
+                       child children (cons id seen))))
+                (gethash id children)))))
+
+(defun t3-code-dashboard--agents-open-p (parent-id children)
+  "Whether PARENT-ID's agent menu is open, including its automatic state."
+  (let ((choice (gethash parent-id t3-code-dashboard--expanded-agents 'auto)))
+    (if (eq choice 'auto)
+        (seq-some (lambda (child)
+                    (or (t3-code-dashboard--working-p child)
+                        (t3-code-dashboard--working-descendant-p child children)))
+                  (gethash parent-id children))
+      (eq choice t))))
+
 (defun t3-code-dashboard--render-thread-tree (project thread children depth)
   "Render THREAD and its CHILDREN map under PROJECT at DEPTH."
   (let* ((thread-id (plist-get thread :id))
          (direct (gethash thread-id children))
-         (expanded (gethash thread-id t3-code-dashboard--expanded-agents)))
+         (expanded (t3-code-dashboard--agents-open-p thread-id children)))
     (append
      (list (t3-code-dashboard--thread-entry project thread depth))
      (when direct
        (cons
-        (t3-code-dashboard--agents-heading-entry thread-id (length direct) depth)
+        (t3-code-dashboard--agents-heading-entry thread-id (length direct) depth children)
         (when expanded
           (mapcan (lambda (child)
                     (t3-code-dashboard--render-thread-tree
                      project child children (1+ depth)))
                   direct)))))))
 
+(defun t3-code-dashboard--settled-only-omission-p ()
+  "Whether the bridge omitted only old settled threads."
+  (and (integerp t3-code-dashboard--omitted-settled-count)
+       (> t3-code-dashboard--omitted-settled-count 0)
+       (equal t3-code-dashboard--omitted-other-count 0)
+       (equal t3-code-dashboard--omitted-project-count 0)))
+
 (defun t3-code-dashboard--truncated-heading-entry ()
   "Create a warning row for a bounded shell projection."
   (list t3-code-dashboard--truncated-heading-id
         (vector
-         (propertize "⚠ View truncated by bridge limits" 'face 'warning
-                     'help-echo "Some projects or threads are omitted")
+         (propertize
+          (if (t3-code-dashboard--settled-only-omission-p)
+              (format "⚠ %d older settled threads omitted by bridge limits"
+                      t3-code-dashboard--omitted-settled-count)
+            "⚠ View truncated by bridge limits")
+          'face 'warning
+          'help-echo "Some projects or threads are omitted")
          "" "" "" "" "" "" "")))
 
 (defun t3-code-dashboard--settled-heading-entry (count)
@@ -228,7 +272,9 @@
       (dolist (thread (plist-get project :threads))
         (unless (equal (plist-get thread :relationshipToParent) "subagent")
           (push (cons project thread)
-                (if (eq (plist-get thread :settled) t) settled active)))))
+                (if (and (eq (plist-get thread :settled) t)
+                         (not (t3-code-dashboard--working-descendant-p thread children)))
+                    settled active)))))
     (setq active (nreverse active)
           settled (nreverse settled))
     (append
@@ -281,8 +327,13 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
     (let ((payload (plist-get message :payload)))
       (when (plist-member payload :projects)
         (setq t3-code-dashboard--projects (plist-get payload :projects)
-              t3-code-dashboard--shell-truncated
-              (eq (plist-get payload :truncated) t))
+              t3-code-dashboard--shell-truncated (eq (plist-get payload :truncated) t)
+              t3-code-dashboard--omitted-settled-count
+              (plist-get payload :omittedSettledCount)
+              t3-code-dashboard--omitted-other-count
+              (plist-get payload :omittedOtherCount)
+              t3-code-dashboard--omitted-project-count
+              (plist-get payload :omittedProjectCount))
         (t3-code-dashboard--refresh)))))
 
 (defun t3-code-dashboard--find-thread (thread-id)
@@ -323,9 +374,15 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
 
 (defun t3-code-dashboard-toggle-agents (parent-id)
   "Toggle delegated agents below PARENT-ID."
-  (if (gethash parent-id t3-code-dashboard--expanded-agents)
-      (remhash parent-id t3-code-dashboard--expanded-agents)
-    (puthash parent-id t t3-code-dashboard--expanded-agents))
+  (let ((children (make-hash-table :test #'equal)))
+    (dolist (project t3-code-dashboard--projects)
+      (dolist (thread (plist-get project :threads))
+        (when-let* ((parent (plist-get thread :parentThreadId)))
+          (when (equal (plist-get thread :relationshipToParent) "subagent")
+            (push thread (gethash parent children))))))
+    (puthash parent-id (if (t3-code-dashboard--agents-open-p parent-id children)
+                           :closed t)
+             t3-code-dashboard--expanded-agents))
   (t3-code-dashboard--refresh))
 
 (defun t3-code-dashboard-toggle-settled ()

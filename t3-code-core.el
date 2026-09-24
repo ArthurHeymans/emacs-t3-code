@@ -530,7 +530,8 @@ view-specific reference suitable for `t3-code-unsubscribe'."
      :subscription subscription :token token)))
 
 (defun t3-code-refresh-subscription (environment reference)
-  "Reload REFERENCE from an authoritative snapshot without reconnecting ENVIRONMENT."
+  "Reload REFERENCE from an authoritative snapshot.
+Keep ENVIRONMENT's bridge connection alive."
   (unless (eq (t3-code-environment-state environment) 'ready)
     (user-error "T3 environment is not ready"))
   (let* ((subscription (t3-code-subscription-reference-subscription reference))

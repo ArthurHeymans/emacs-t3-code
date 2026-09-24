@@ -94,7 +94,7 @@ The M0/M1 shell snapshot payload is:
 }
 ```
 
-This is a view model, not a serialization of T3 contracts. During M1, shell `event` records carry the same replacement projection shape as snapshots, allowing the bridge to reduce and coalesce raw server updates without moving T3 reducer schemas into Elisp. An empty `projects` array is authoritative. Future fields remain optional. Future semantic item kinds must have bounded generic rendering in Emacs.
+This is a view model, not a serialization of T3 contracts. During M1, shell `event` records carry the same replacement projection shape as snapshots, allowing the bridge to reduce and coalesce raw server updates without moving T3 reducer schemas into Elisp. An empty `projects` array is authoritative. Future fields remain optional. Future semantic item kinds must have bounded generic rendering in Emacs. When truncated, newer bridges also report `omittedSettledCount`, `omittedOtherCount`, and `omittedProjectCount`; consumers must treat absent counts from older bridges as unknown, not zero.
 
 ## Normalized thread projection
 
@@ -137,7 +137,7 @@ A `thread` subscription uses the thread ID as its identity and emits replacement
 
 The bridge reduces raw thread events and emits complete normalized replacements. It retains at most 100 recent visible items and 256,000 UTF-8 bytes of text/detail per payload. Per-field text is capped at 32,000 characters, display labels are single-line and bounded, and final payloads are trimmed below a 700,000-byte target. Arbitrary dynamic-tool input/output is omitted because it may contain secrets. A missing/deleted thread uses `thread: null` with a bounded `error` or `deleted: true` marker.
 
-All protocol output records have a hard 900,000-byte encoded limit, below Emacs's 1 MiB input ceiling. Shell projections retain at most 50 projects and 2,000 threads and are further byte-trimmed; `truncated: true` tells renderers that authoritative state was intentionally omitted. Subscription failures and unexpected normal stream completion retry after a bounded delay with a fresh authoritative snapshot; unsubscribing interrupts the retry loop.
+All protocol output records have a hard 900,000-byte encoded limit, below Emacs's 1 MiB input ceiling. Shell projections retain at most 50 projects and 2,000 threads and are further byte-trimmed. Working threads and their parent chain are selected first, then other unsettled threads, then the most recently updated settled threads. `truncated: true` tells renderers that authoritative state was intentionally omitted; an omitted non-settled count can still occur if the hard bounds are exhausted. Subscription failures and unexpected normal stream completion retry after a bounded delay with a fresh authoritative snapshot; unsubscribing interrupts the retry loop.
 
 ### Optional section metadata
 

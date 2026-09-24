@@ -83,6 +83,19 @@
     (should (string-match-p "View truncated by bridge limits" (buffer-string)))
     (should (string-match-p "truncated" (t3-code-dashboard--header-line)))))
 
+(ert-deftest t3-code-test-dashboard-explains-settled-only-truncation ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--environment
+          (t3-code-environment-create :id "test" :endpoint "fake://test"))
+    (t3-code-dashboard--on-shell-message
+     '(:kind "snapshot" :payload
+       (:truncated t :omittedSettledCount 37 :omittedOtherCount 0
+        :omittedProjectCount 0 :projects ())))
+    (should (string-match-p "37 older settled threads omitted" (buffer-string)))
+    (should (string-match-p "37 older settled omitted"
+                            (t3-code-dashboard--header-line)))))
+
 (ert-deftest t3-code-test-dashboard-shows-settled-threads-by-default ()
   (let ((t3-code-dashboard-collapse-settled nil))
     (with-temp-buffer
@@ -124,6 +137,25 @@
       (should (equal (substring-no-properties
                       (aref (cadr (nth 2 tabulated-list-entries)) 3))
                      " ↳ Agent")))))
+
+(ert-deftest t3-code-test-dashboard-shows-working-agent-under-settled-parent ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--projects
+          '((:id "project" :name "owner/repo"
+             :threads ((:id "parent" :title "Parent" :status "idle" :settled t)
+                       (:id "agent" :title "Agent" :status "running" :settled :false
+                        :parentThreadId "parent" :relationshipToParent "subagent")))))
+    (t3-code-dashboard--refresh)
+    (let ((heading (t3-code-dashboard--agents-heading-id "parent")))
+      (should (equal (mapcar #'car tabulated-list-entries)
+                     (list "parent" heading "agent")))
+      (should (string-match-p "▾ Agents" (buffer-string)))
+      (should (t3-code-dashboard--goto-id heading))
+      (t3-code-dashboard-toggle-at-point)
+      (should (equal (mapcar #'car tabulated-list-entries)
+                     (list "parent" heading)))
+      (should (string-match-p "▸ Agents" (buffer-string))))))
 
 (ert-deftest t3-code-test-dashboard-reopen-does-not-leak-reference ()
   (let* ((environment (t3-code-environment-create
