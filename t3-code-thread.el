@@ -520,11 +520,20 @@ Keep the input buffer and preserve edits made while acceptance is pending."
 
 (declare-function t3-code--reconnect "t3-code" (environment))
 
-(defun t3-code-thread-reconnect ()
-  "Reconnect the shared environment used by this thread."
-  (interactive)
-  (require 't3-code)
-  (t3-code--reconnect t3-code-thread--environment))
+(defun t3-code-thread-reconnect (&optional restart)
+  "Refresh this thread without restarting the shared bridge.
+With prefix argument RESTART, start a new bridge (which may require a new
+token).  Plain refresh never asks for a token, even after a disconnect."
+  (interactive "P")
+  (let ((environment t3-code-thread--environment))
+    (cond
+     ((and (not restart) (eq (t3-code-environment-state environment) 'ready))
+      (t3-code-refresh-subscription environment t3-code-thread--subscription))
+     ((not restart)
+      (user-error "T3 bridge is not ready; use C-u g to reconnect"))
+     (t
+      (require 't3-code)
+      (t3-code--reconnect environment)))))
 
 (defun t3-code-thread-quit ()
   "Hide this frame's thread and input windows without stopping work."

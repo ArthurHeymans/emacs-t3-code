@@ -362,7 +362,7 @@ Omit resume state when WITHOUT-RESUME is non-nil."
 (defun t3-code--repair-subscription (environment subscription)
   "Request an authoritative replacement snapshot for SUBSCRIPTION."
   (setf (t3-code-subscription-sequence subscription) nil
-        (t3-code-subscription-synchronized subscription) nil)
+        (t3-code-subscription-synchronized subscription) 'refreshing)
   (t3-code--set-state environment 'repairing)
   (t3-code--send-now environment
                      (list :kind "unsubscribe"
@@ -382,6 +382,9 @@ Omit resume state when WITHOUT-RESUME is non-nil."
       (t3-code--diagnose environment "Message for unknown subscription: %S" id))
      ((not (= (or generation -1) (t3-code-environment-generation environment)))
       (t3-code--diagnose environment "Ignored stale generation %S for %s" generation id))
+     ((and (eq (t3-code-subscription-synchronized subscription) 'refreshing)
+           (not (equal kind "snapshot")))
+      nil)
      ((and (equal kind "event") sequence
            (t3-code-subscription-sequence subscription)
            (<= sequence (t3-code-subscription-sequence subscription)))
@@ -393,9 +396,12 @@ Omit resume state when WITHOUT-RESUME is non-nil."
                          id (1+ (t3-code-subscription-sequence subscription)) sequence)
       (t3-code--repair-subscription environment subscription))
      (t
+      (when (equal kind "snapshot")
+        (setf (t3-code-subscription-synchronized subscription) nil))
       (when sequence
         (setf (t3-code-subscription-sequence subscription)
-              (max sequence (or (t3-code-subscription-sequence subscription) sequence))))
+              (if (equal kind "snapshot") sequence
+                (max sequence (or (t3-code-subscription-sequence subscription) sequence)))))
       (setf (t3-code-subscription-generation subscription) generation)
       (when (equal kind "synchronized")
         (setf (t3-code-subscription-synchronized subscription) t)
@@ -522,6 +528,19 @@ view-specific reference suitable for `t3-code-unsubscribe'."
       (t3-code--send environment (t3-code--subscription-record subscription)))
     (t3-code-subscription-reference-create
      :subscription subscription :token token)))
+
+(defun t3-code-refresh-subscription (environment reference)
+  "Reload REFERENCE from an authoritative snapshot without reconnecting ENVIRONMENT."
+  (unless (eq (t3-code-environment-state environment) 'ready)
+    (user-error "T3 environment is not ready"))
+  (let* ((subscription (t3-code-subscription-reference-subscription reference))
+         (id (t3-code-subscription-id subscription)))
+    (unless (eq subscription (gethash id (t3-code-environment-subscriptions environment)))
+      (user-error "T3 subscription is no longer active"))
+    (setf (t3-code-subscription-sequence subscription) nil
+          (t3-code-subscription-synchronized subscription) 'refreshing)
+    (t3-code--send-now environment (list :kind "unsubscribe" :subscriptionId id))
+    (t3-code--send-now environment (t3-code--subscription-record subscription t))))
 
 (defun t3-code-unsubscribe (environment reference)
   "Release view-specific subscription REFERENCE from ENVIRONMENT."

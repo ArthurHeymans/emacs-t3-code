@@ -110,6 +110,39 @@
                    '("unsubscribe" "subscribe")))
     (should-not (plist-member (car sent) :resumeSequence))))
 
+(ert-deftest t3-code-test-refresh-resnapshots-without-reconnecting ()
+  (let* ((environment (t3-code-environment-create
+                       :id "local" :generation 1 :state 'ready))
+         (subscription (t3-code-subscription-create
+                        :id "shell:null" :kind "shell" :sequence 41))
+         (reference (t3-code-subscription-reference-create
+                     :subscription subscription :token "listener"))
+         sent received)
+    (puthash "shell:null" subscription
+             (t3-code-environment-subscriptions environment))
+    (puthash "listener" (lambda (message) (push (plist-get message :sequence) received))
+             (t3-code-subscription-callbacks subscription))
+    (cl-letf (((symbol-function 't3-code--send-now)
+               (lambda (_environment record) (push record sent))))
+      (t3-code-refresh-subscription environment reference)
+      (should (equal (mapcar (lambda (record) (plist-get record :kind))
+                             (nreverse sent)) '("unsubscribe" "subscribe")))
+      (should-not (plist-member (car sent) :resumeSequence))
+      ;; Ignore a late event from the old stream while waiting for its replacement.
+      (t3-code--handle-subscription-message
+       environment '(:kind "event" :subscriptionId "shell:null"
+                     :generation 1 :sequence 42))
+      (should-not received)
+      (t3-code--handle-subscription-message
+       environment '(:kind "snapshot" :subscriptionId "shell:null"
+                     :generation 1 :sequence 1 :payload (:projects ())))
+      (t3-code--handle-subscription-message
+       environment '(:kind "event" :subscriptionId "shell:null"
+                     :generation 1 :sequence 2 :payload (:projects ()))))
+    (should (equal (nreverse received) '(1 2)))
+    (should (= (t3-code-subscription-sequence subscription) 2))
+    (should (eq (t3-code-environment-state environment) 'ready))))
+
 (ert-deftest t3-code-test-reference-counted-subscriptions ()
   (let* ((environment (t3-code-environment-create :id "local" :state 'connecting))
          (first (t3-code-subscribe environment "shell" nil #'ignore))

@@ -137,7 +137,7 @@ A `thread` subscription uses the thread ID as its identity and emits replacement
 
 The bridge reduces raw thread events and emits complete normalized replacements. It retains at most 100 recent visible items and 256,000 UTF-8 bytes of text/detail per payload. Per-field text is capped at 32,000 characters, display labels are single-line and bounded, and final payloads are trimmed below a 700,000-byte target. Arbitrary dynamic-tool input/output is omitted because it may contain secrets. A missing/deleted thread uses `thread: null` with a bounded `error` or `deleted: true` marker.
 
-All protocol output records have a hard 900,000-byte encoded limit, below Emacs's 1 MiB input ceiling. Shell projections retain at most 50 projects and 500 threads and are further byte-trimmed; `truncated: true` tells renderers that authoritative state was intentionally omitted. Subscription failures and unexpected normal stream completion retry after a bounded delay with a fresh authoritative snapshot; unsubscribing interrupts the retry loop.
+All protocol output records have a hard 900,000-byte encoded limit, below Emacs's 1 MiB input ceiling. Shell projections retain at most 50 projects and 2,000 threads and are further byte-trimmed; `truncated: true` tells renderers that authoritative state was intentionally omitted. Subscription failures and unexpected normal stream completion retry after a bounded delay with a fresh authoritative snapshot; unsubscribing interrupts the retry loop.
 
 ### Optional section metadata
 

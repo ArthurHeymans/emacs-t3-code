@@ -174,8 +174,36 @@
       (cl-letf (((symbol-function 't3-code-restart)
                  (lambda (_environment &optional supplied)
                    (setq credential supplied))))
-        (t3-code-dashboard-reconnect))
+        (t3-code-dashboard-reconnect t))
       (should (equal credential '(bearer . "configured-token"))))))
+
+(ert-deftest t3-code-test-dashboard-refresh-does-not-restart-or-ask ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (let* ((environment (t3-code-environment-create :id "test" :state 'ready))
+           (reference (t3-code-subscription-reference-create :token "listener"))
+           (t3-code-dashboard--environment environment)
+           (t3-code-dashboard--subscription reference)
+           refreshed)
+      (cl-letf (((symbol-function 't3-code-refresh-subscription)
+                 (lambda (env ref) (setq refreshed (list env ref))))
+                ((symbol-function 't3-code--reconnect)
+                 (lambda (&rest _) (ert-fail "Refresh restarted the bridge")))
+                ((symbol-function 'read-passwd)
+                 (lambda (&rest _) (ert-fail "Refresh requested another token"))))
+        (t3-code-dashboard-reconnect))
+      (should (equal refreshed (list environment reference))))))
+
+(ert-deftest t3-code-test-dashboard-plain-refresh-disconnected-never-asks ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--environment
+          (t3-code-environment-create :id "test" :state 'disconnected))
+    (cl-letf (((symbol-function 't3-code--reconnect)
+               (lambda (&rest _) (ert-fail "Refresh restarted the bridge")))
+              ((symbol-function 'read-passwd)
+               (lambda (&rest _) (ert-fail "Refresh requested a token"))))
+      (should-error (t3-code-dashboard-reconnect) :type 'user-error))))
 
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here

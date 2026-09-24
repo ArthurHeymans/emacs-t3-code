@@ -338,11 +338,20 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
 
 (declare-function t3-code--reconnect "t3-code" (environment))
 
-(defun t3-code-dashboard-reconnect ()
-  "Restart the current dashboard's environment bridge."
-  (interactive)
-  (require 't3-code)
-  (t3-code--reconnect t3-code-dashboard--environment))
+(defun t3-code-dashboard-reconnect (&optional restart)
+  "Refresh the shell without restarting the bridge.
+With prefix argument RESTART, start a new bridge (which may require a new
+token).  Plain refresh never asks for a token, even after a disconnect."
+  (interactive "P")
+  (let ((environment t3-code-dashboard--environment))
+    (cond
+     ((and (not restart) (eq (t3-code-environment-state environment) 'ready))
+      (t3-code-refresh-subscription environment t3-code-dashboard--subscription))
+     ((not restart)
+      (user-error "T3 bridge is not ready; use C-u g to reconnect"))
+     (t
+      (require 't3-code)
+      (t3-code--reconnect environment)))))
 
 (defun t3-code-dashboard-quit ()
   "Kill the dashboard, releasing only its shell subscription."
