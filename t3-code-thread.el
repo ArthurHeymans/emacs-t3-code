@@ -86,11 +86,18 @@
                     t3-code-thread--thread-id "Thread"))
          (status (or (plist-get thread :status) (plist-get summary :status) "loading"))
          (provider (or (plist-get thread :provider) (plist-get summary :provider) ""))
-         (model (or (plist-get thread :model) (plist-get summary :model) "")))
+         (model (or (plist-get thread :model) (plist-get summary :model) ""))
+         (running-model (plist-get thread :activeRunModel))
+         (running-provider (plist-get thread :activeRunProvider)))
     (concat " " (propertize title 'face 'bold)
             "  [" (propertize status 'face (t3-code-thread--status-face status)) "]"
             (if (string-empty-p provider) "" (concat "  " provider))
             (if (string-empty-p model) "" (concat "/" model))
+            (if (and running-model
+                     (or (not (equal running-model model))
+                         (not (equal running-provider provider))))
+                (format "  · running: %s/%s" (or running-provider provider) running-model)
+              "")
             (format "  · %s · %d unseen updates" t3-code-thread--view t3-code-thread--unseen)
             (when (and t3-code-thread--environment
                        (not (eq (t3-code-environment-state t3-code-thread--environment) 'ready)))
@@ -242,7 +249,8 @@ Keep the input buffer and preserve edits made while acceptance is pending."
   "C-c C-s" #'t3-code-compose-steer
   "C-c C-q" #'t3-code-compose-queue
   "M-p" #'t3-code-compose-history-previous
-  "M-n" #'t3-code-compose-history-next)
+  "M-n" #'t3-code-compose-history-next
+  "C-c C-m" #'t3-code-compose-select-model)
 
 ;; `defvar-keymap' does not replace an existing map when this file is reloaded.
 (keymap-set t3-code-compose-mode-map "C-c C-c" #'t3-code-compose-send)
@@ -251,6 +259,7 @@ Keep the input buffer and preserve edits made while acceptance is pending."
 (keymap-set t3-code-compose-mode-map "C-c C-q" #'t3-code-compose-queue)
 (keymap-set t3-code-compose-mode-map "M-p" #'t3-code-compose-history-previous)
 (keymap-set t3-code-compose-mode-map "M-n" #'t3-code-compose-history-next)
+(keymap-set t3-code-compose-mode-map "C-c C-m" #'t3-code-compose-select-model)
 
 (defun t3-code-compose--header-line ()
   "Display the draft target and current thread policy."
@@ -262,11 +271,27 @@ Keep the input buffer and preserve edits made while acceptance is pending."
            (concat (or (plist-get (plist-get t3-code-thread--payload :thread) :title)
                        (plist-get t3-code-thread--summary :title)
                        t3-code-thread--thread-id)
-                   " · " (t3-code-thread--current-runtime-mode)))
+                   " · " (t3-code-thread--current-runtime-mode)
+                   (let ((selection (plist-get (plist-get t3-code-thread--payload :thread)
+                                               :modelSelection)))
+                     (if selection
+                         (concat
+                          (format " · %s/%s" (plist-get selection :instanceId)
+                                  (plist-get selection :model))
+                          (when-let* ((options (plist-get selection :options)))
+                            (format " (%s)" (string-join
+                                            (mapcar (lambda (option)
+                                                      (format "%s=%s" (plist-get option :id)
+                                                              (let ((value (plist-get option :value)))
+                                                                (cond ((eq value t) "yes")
+                                                                      ((eq value :false) "no")
+                                                                      (t value)))))
+                                                    options) ", "))))
+                       ""))))
        "thread closed (draft retained)")
      " · " (or t3-code-compose--dispatch-mode "auto")
      (if t3-code-compose--sending " · sending" "")
-     " · C-c C-c send · C-c C-k hide")))
+     " · C-c C-m model · C-c C-c send · C-c C-k hide")))
 
 (define-derived-mode t3-code-compose-mode text-mode "T3-Compose"
   "Major mode for composing a T3 thread message."
@@ -378,6 +403,122 @@ Keep the input buffer and preserve edits made while acceptance is pending."
   (interactive)
   (when (yes-or-no-p "Cancel the turn awaiting approval? ")
     (t3-code-thread-respond-approval "cancel")))
+
+(defun t3-code-thread--model-options (descriptors current)
+  "Prompt for DESCRIPTORS, preserving CURRENT option values as defaults."
+  (delq nil
+        (mapcar
+         (lambda (descriptor)
+           (let* ((id (plist-get descriptor :id))
+                  (saved (seq-find (lambda (option) (equal id (plist-get option :id))) current))
+                  (value (plist-get saved :value))
+                  (label (plist-get descriptor :label)))
+             (pcase (plist-get descriptor :type)
+               ("boolean"
+                (let ((answer (completing-read
+                               (format "%s: " label) '("default" "yes" "no") nil t nil nil
+                               (if saved (if (eq value t) "yes" "no") "default"))))
+                  (unless (equal answer "default")
+                    (list :id id :value (equal answer "yes")))))
+               ("select"
+                (let* ((choices (plist-get descriptor :choices))
+                       (default (or (and (stringp value) value)
+                                    (plist-get (seq-find (lambda (choice)
+                                                           (eq (plist-get choice :isDefault) t))
+                                                         choices) :id)))
+                       (answer (completing-read
+                                (format "%s: " label)
+                                (append '("default") (mapcar (lambda (choice)
+                                                                  (plist-get choice :id)) choices))
+                                nil t nil nil (or default "default"))))
+                  (unless (equal answer "default")
+                    (list :id id :value answer)))))))
+         descriptors)))
+
+(defun t3-code-thread--select-model (catalog)
+  "Select a model from normalized CATALOG and persist it on this thread."
+  (let* ((thread (plist-get t3-code-thread--payload :thread))
+         (current (plist-get thread :modelSelection))
+         (providers (plist-get catalog :providers))
+         (choices (cl-loop for provider in providers
+                           append (cl-loop for model in (plist-get provider :models)
+                                           collect (cons
+                                                    (format "%s · %s [%s]%s"
+                                                            (plist-get provider :name)
+                                                            (plist-get model :name)
+                                                            (plist-get provider :instanceId)
+                                                            (if (eq (plist-get provider :available) t)
+                                                                ""
+                                                              " (unavailable)"))
+                                                    (cons provider model)))))
+         (picked (if choices
+                     (assoc (completing-read "Provider / model: " choices nil t) choices)
+                   (user-error "No available models in the server catalog")))
+         (provider (cadr picked))
+         (model (cddr picked))
+         (instance (plist-get provider :instanceId))
+         (slug (plist-get model :slug)))
+    (unless (eq (plist-get provider :available) t)
+      (user-error "Provider unavailable: %s"
+                  (or (plist-get provider :reason) (plist-get provider :name))))
+    (when (and (eq (plist-get thread :hasStartedSession) t)
+               (equal instance (plist-get current :instanceId))
+               (not (equal slug (plist-get current :model)))
+               (eq (plist-get provider :requiresNewThreadForModelChange) t))
+      (user-error "This provider needs a new thread to change models"))
+    (let* ((same-model (and (equal instance (plist-get current :instanceId))
+                            (equal slug (plist-get current :model))))
+           (descriptors (plist-get model :options))
+           (options (if descriptors
+                        (t3-code-thread--model-options
+                         descriptors (when same-model (plist-get current :options)))
+                      (when same-model (plist-get current :options))))
+           (selection (append (list :instanceId instance :model slug)
+                              (when options (list :options (vconcat options))))))
+      (unless (equal selection current)
+        (t3-code-thread--request
+         "thread.modelSelection.set"
+         (list :threadId t3-code-thread--thread-id
+               :commandId (t3-code-thread--id "model")
+               :modelSelection selection)
+         (format "T3 next model: %s/%s" instance slug)
+         (lambda (_result)
+           (t3-code-refresh-subscription t3-code-thread--environment
+                                         t3-code-thread--subscription)))))))
+
+(defun t3-code-thread--model-selection-supported-p ()
+  "Whether this thread's bridge advertises model selection."
+  (and t3-code-thread--environment
+       (eq (plist-get (t3-code-environment-capabilities t3-code-thread--environment)
+                      :modelSelection) t)))
+
+(defun t3-code-thread-select-model ()
+  "Choose the provider instance, model and options for subsequent turns."
+  (interactive)
+  (unless (t3-code-thread--model-selection-supported-p)
+    (user-error "Connected bridge does not support model selection"))
+  (unless (plist-get t3-code-thread--payload :thread)
+    (user-error "Thread details have not loaded"))
+  (let ((buffer (current-buffer)))
+    (t3-code-request
+     t3-code-thread--environment "model.catalog" nil
+     (lambda (result error)
+       (if error
+           (message "T3 model catalog failed: %s" (or (plist-get error :message) error))
+         (when (buffer-live-p buffer)
+           (run-at-time 0 nil
+                        (lambda ()
+                          (when (buffer-live-p buffer)
+                            (with-current-buffer buffer
+                              (t3-code-thread--select-model result)))))))))))
+
+(defun t3-code-compose-select-model ()
+  "Select the next model without losing the current message draft."
+  (interactive)
+  (unless (buffer-live-p t3-code-compose--origin-buffer)
+    (user-error "Reopen the thread before selecting a model"))
+  (with-current-buffer t3-code-compose--origin-buffer
+    (t3-code-thread-select-model)))
 
 (defun t3-code-thread-set-runtime-mode ()
   "Choose and set the thread runtime mode."
@@ -505,6 +646,8 @@ Keep the input buffer and preserve edits made while acceptance is pending."
     ("n" "Decline" t3-code-thread-decline)
     ("x" "Cancel turn" t3-code-thread-cancel-approval)]
    ["Modes"
+    ("M" "Provider / model" t3-code-thread-select-model
+     :if t3-code-thread--model-selection-supported-p)
     ("r" "Runtime mode" t3-code-thread-set-runtime-mode)
     ("p" "Interaction mode" t3-code-thread-set-interaction-mode)]
    ["Lifecycle"

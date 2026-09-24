@@ -77,6 +77,77 @@
       (should (eq (plist-get (cdr suffix) :command)
                   #'t3-code-thread-compose-queue)))))
 
+(ert-deftest t3-code-test-thread-select-model-preserves-draft-and-sends-options ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--environment
+          (t3-code-environment-create
+           :id "test" :state 'ready :capabilities '(:mutations t :modelSelection t))
+          t3-code-thread--thread-id "thread-1"
+          t3-code-thread--payload
+          '(:thread (:id "thread-1" :title "Example"
+                     :modelSelection (:instanceId "codex" :model "old"))))
+    (let ((origin (current-buffer))
+          (catalog '(:providers ((:instanceId "work" :name "Work" :available t
+                                  :models ((:slug "new" :name "New"
+                                            :options ((:id "effort" :label "Effort"
+                                                       :type "select"
+                                                       :choices ((:id "high" :isDefault t)
+                                                                 (:id "low"))))))))))
+          (answers '("Work · New [work]" "low")) request)
+      (with-temp-buffer
+        (t3-code-compose-mode)
+        (setq t3-code-compose--origin-buffer origin)
+        (insert "unsent draft")
+        (cl-letf (((symbol-function 't3-code-request)
+                   (lambda (_environment operation _input callback)
+                     (should (equal operation "model.catalog"))
+                     (funcall callback catalog nil)))
+                  ((symbol-function 'run-at-time)
+                   (lambda (_delay _repeat callback) (funcall callback)))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _args) (pop answers)))
+                  ((symbol-function 't3-code-thread--request)
+                   (lambda (operation input &rest _args)
+                     (setq request (list operation input)))))
+          (t3-code-compose-select-model))
+        (should (equal (buffer-string) "unsent draft")))
+      (should (equal (car request) "thread.modelSelection.set"))
+      (should (equal (plist-get (plist-get (cadr request) :modelSelection) :instanceId)
+                     "work"))
+      (should (equal (plist-get (plist-get (cadr request) :modelSelection) :options)
+                     [(:id "effort" :value "low")])))))
+
+(ert-deftest t3-code-test-thread-model-picker-explains-unsupported-change ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--payload
+          '(:thread (:modelSelection (:instanceId "work" :model "old")
+                     :hasStartedSession t)))
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work · New [work]")))
+      (should-error
+       (t3-code-thread--select-model
+        '(:providers ((:instanceId "work" :name "Work" :available t
+                       :requiresNewThreadForModelChange t
+                       :models ((:slug "new" :name "New"))))))
+       :type 'user-error))))
+
+(ert-deftest t3-code-test-thread-header-distinguishes-running-model ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--payload
+          '(:thread (:title "Example" :status "running" :provider "work"
+                     :model "next" :activeRunProvider "work" :activeRunModel "old")))
+    (should (string-match-p "work/next.*running: work/old"
+                            (t3-code-thread--header-line)))))
+
+(ert-deftest t3-code-test-thread-model-selection-rejects-unsupported-bridge ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--environment
+          (t3-code-environment-create :id "old" :state 'ready :capabilities '(:mutations t)))
+    (should-error (t3-code-thread-select-model) :type 'user-error)))
+
 (ert-deftest t3-code-test-thread-shows-truncation-and-errors ()
   (with-temp-buffer
     (t3-code-thread-mode)

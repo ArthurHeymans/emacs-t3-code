@@ -17,7 +17,7 @@ This repository implements the shared bridge foundation and a sectioned Emacs wo
 - a read-only =tabulated-list-mode= dashboard with active/settled distinction
 - a sectioned live transcript with turn/work/item folding and an attention index
 - stable reading positions across streaming updates and per-window follow
-- a persistent multiline composer, prompt history, and a transient action menu
+- a persistent multiline composer, prompt history, model selection, and a transient action menu
 
 The matching T3 implementation now provides the bridge as =t3 client --stdio=, keeping the private contracts and client runtime inside the versioned T3 bundle. The current slice supports authenticated local/direct bearer connections, the live shell dashboard, normalized live thread projections, and normalized thread mutations. SSH, relay/DPoP, and credential persistence remain later milestones.
 
@@ -71,7 +71,7 @@ With a bridge advertising =threadSections=, each run has a foldable turn heading
 
 Manual fold choices survive streaming, completion and reconnect. Pending approvals, input requests and failures have an attention index outside folded history; =RET= on an index entry reveals its item without performing an action. A matching bridge also reports the total pending request count and up to 20 request details outside the recent-history window. Missing request details are not invented. User-input response support is still a later protocol feature.
 
-The input buffer is an ordinary editable text buffer, reused per environment/thread. =C-c C-c= sends using the displayed dispatch mode, =C-c C-s= steers, and =C-c C-q= queues. Auto may start, steer or queue according to server state. =M-p= / =M-n= recall sent prompts and restore the draft. Acceptance clears only an unchanged draft; edits made during a send and failed sends are retained. =C-c C-k= now hides the composer without deleting its draft. Restart asks for confirmation. Drafts and fold choices last for the buffer lifetime, not across Emacs restarts.
+The input buffer is an ordinary editable text buffer, reused per environment/thread. =C-c C-m= selects a provider instance, model, and optional model-specific settings without losing the draft (also available under =.= / =a= → Modes). The composer header shows the model selected for subsequent turns; when active work uses a different model the transcript header also shows the running model. Selection requires a bridge advertising =modelSelection= and the server remains authoritative about whether a started session can switch. =C-c C-c= sends using the displayed dispatch mode, =C-c C-s= steers, and =C-c C-q= queues. Auto may start, steer or queue according to server state. =M-p= / =M-n= recall sent prompts and restore the draft. Acceptance clears only an unchanged draft; edits made during a send and failed sends are retained. =C-c C-k= now hides the composer without deleting its draft. Restart asks for confirmation. Drafts and fold choices last for the buffer lifetime, not across Emacs restarts.
 
 The transient provides interrupt, approval responses, runtime and interaction modes, settle/reactivate, snooze controls, worktree/VC views, and ID copying. Message sends preserve the thread's current runtime mode; =full-access= is the display fallback for threads without projected policy data. Hiding or killing a view never stops server work; killing releases that view's subscription.
 

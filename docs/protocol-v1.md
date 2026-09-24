@@ -108,6 +108,10 @@ A `thread` subscription uses the thread ID as its identity and emits replacement
     "status": "running|waiting-approval|idle|failed",
     "provider": "codex",
     "model": "gpt-5.3",
+    "modelSelection": { "instanceId": "codex", "model": "gpt-5.3" },
+    "activeRunModel": null,
+    "activeRunProvider": null,
+    "hasStartedSession": false,
     "worktree": "root",
     "worktreePath": null,
     "runtimeMode": "full-access",
@@ -160,6 +164,9 @@ Pairing requests both `orchestration:read` and `orchestration:operate`. Mutation
 - `thread.interactionMode.set`: select `default` or `plan`.
 - `thread.settled.set`: settle or reactivate the thread.
 - `thread.snooze.set`: set or clear an ISO timestamp.
+- `thread.modelSelection.set`: set the instance-routed `{instanceId, model, options?}` selection for subsequent turns. The bridge selects the appropriate provider-switch or same-provider command; the server validates whether the session permits the change.
+
+A bridge advertising `modelSelection: true` also supports `model.catalog` (a bounded request result with provider instance IDs, display names, availability, model slugs and select/boolean option descriptors). The thread projection carries the selected `modelSelection` and the active run's `activeRunProvider` / `activeRunModel` (when present). `hasStartedSession` helps clients explain providers that require a new thread for model changes. An older bridge has none of these fields or operations; clients must not offer selection without the capability.
 
 Request failures are returned as bounded response errors and do not terminate the shared bridge process. Raw orchestration command schemas remain private to the version-matched bridge.
 
