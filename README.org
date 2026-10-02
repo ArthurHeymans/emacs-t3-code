@@ -1,38 +1,38 @@
 #+title: t3-code.el
 
-An Emacs client for the T3 Code server.
+An Emacs client for the T3 Code server, in the spirit of [[https://github.com/dnouri/pi-coding-agent][pi-coding-agent]]: a
+rendered Markdown chat buffer for the conversation, an ordinary Emacs buffer
+below it for the next message, and the current project as the starting point.
 
 * Status
 
-This repository implements the shared bridge foundation and a sectioned Emacs workspace:
+- versioned NDJSON bridge protocol (=t3 client --stdio=), one shared process
+  and state store per environment, reference-counted subscriptions, sequence
+  repair and bounded input handling
+- project-first entry, a ledger of all threads, a switcher, resume and search
+- a live chat transcript with Markdown and diff fontification, inline tool
+  blocks with previews, folding, file/URL visiting and paged older history
+- an input buffer with send/queue/steer/abort, prompt history, completion of
+  slash commands, skills, project files and paths, and a pi-style header
+- new threads (project root or worktree), forks, answers to agent questions,
+  queued-message management, rename/pin/archive/delete, model and reasoning
+  effort selection, notifications
 
-- versioned NDJSON bridge protocol
-- one shared process and state store per environment
-- request correlation and explicit cancellation
-- reference-counted subscriptions
-- connection generation and sequence repair
-- bounded malformed-input and stderr handling
-- explicit rejection of SSH/TRAMP environments until the remote milestone
-- deterministic fake bridge and ERT integration tests
-- a read-only =tabulated-list-mode= dashboard with active/settled distinction
-- a sectioned live transcript with turn/work/item folding and an attention index
-- stable reading positions across streaming updates and per-window follow
-- a persistent multiline composer, prompt history, model selection, and a transient action menu
+SSH/TRAMP environments, relay/DPoP, credential persistence, terminals, diffs
+per turn and pull requests remain later milestones.
 
-The matching T3 implementation now provides the bridge as =t3 client --stdio=, keeping the private contracts and client runtime inside the versioned T3 bundle. The current slice supports authenticated local/direct bearer connections, the live shell dashboard, normalized live thread projections, and normalized thread mutations. SSH, relay/DPoP, and credential persistence remain later milestones.
+* Setup
 
-* Demo
-
-Add this checkout to =load-path= and run:
+Add this checkout to =load-path= and connect to a local server:
 
 #+begin_src emacs-lisp
 (require 't3-code)
-(t3-code-demo)
+(defalias 't3 't3-code)
 #+end_src
 
-The demo starts =bridge/fake-t3e.mjs= with Node and opens a deterministic dashboard. Ordinary =M-x t3-code= expects a =t3= build containing =t3 client --stdio= in =exec-path=.
-
-To use the adjacent source checkout rather than an older installed =t3= binary, configure the version-matched bridge before connecting:
+=M-x t3-code= expects a =t3= build containing =t3 client --stdio= in
+=exec-path=.  To use the adjacent source checkout rather than an installed
+=t3=, configure the version-matched bridge:
 
 #+begin_src emacs-lisp
 (setq t3-code-bridge-command
@@ -41,50 +41,166 @@ To use the adjacent source checkout rather than an older installed =t3= binary, 
             "client" "--stdio"))
 #+end_src
 
-Replace =/path/to/emacs-t3-code/= with this checkout's absolute path. Use the same T3 checkout/build as the server; the historical =bridge/t3-pin.json= records the original compatibility spike, not the current source checkout. Run =make check-t3code= to test the adjacent bridge's projections and exercise its real stdio startup from Emacs (set =T3CODE_DIR= if it is elsewhere). This gate does not replace an authenticated live-server test.
+By default =t3-code-token= is =ask=: Emacs asks for a token whenever it starts
+or restarts the bridge.  Create a pairing token with =t3 auth pairing create=;
+for a reusable bearer token set =t3-code-token-type= to =bearer=.  A string
+value is used without prompting (Customize may write it to disk), and nil
+inherits =T3_CLIENT_PAIRING_TOKEN= / =T3_CLIENT_ACCESS_TOKEN=.
+=M-x t3-code-connect-prompt= connects to another URL with an explicit token.
 
-Run =M-x t3-code= to connect to =t3-code-default-endpoint=. By default, =t3-code-token= is =ask=, so Emacs securely asks for a token whenever it starts or restarts the bridge; reopening an already connected dashboard does not ask. Create a pairing token with =t3 auth pairing create=. For a bearer token, set =t3-code-token-type= to =bearer=.
+=M-x t3-code-demo= opens the ledger against the deterministic fake bridge in
+=bridge/fake-t3e.mjs=.
 
-Set =t3-code-token= to a string to use it without prompting, or to nil to inherit =T3_CLIENT_PAIRING_TOKEN= / =T3_CLIENT_ACCESS_TOKEN= from Emacs's environment. A configured token may be written to disk by Customize; prefer =ask= if that is undesirable. Pairing tokens are one-time: a disconnected bridge needs a new one, while a reusable bearer token can be configured. In a connected dashboard or thread, =g= refreshes its snapshot without reconnecting or asking for a token; =C-u g= forces a bridge restart. =M-x t3-code-connect-prompt= remains available to enter a different URL and token explicitly. If the bridge rejects the endpoint or credentials, the dashboard displays the fatal reason in its header.
+* Everyday workflow
 
-The dashboard groups settled threads under a =Settled (N)= menu at the bottom. It starts collapsed; press =RET= or =TAB= on it, or =s= anywhere, to toggle it. Set =t3-code-dashboard-collapse-settled= to nil to start expanded.
+=M-x t3-code= opens the conversation of the project containing
+=default-directory=: the thread whose worktree you are in, otherwise the
+project's most relevant active thread (working, then unseen, then most
+recent).  Without one it offers to start a thread.  Outside known projects,
+or with =C-u=, it opens the ledger.  Run again from a T3 buffer, it restores
+the chat and input windows and focuses the input; =M-x t3-code-toggle= hides
+them.
 
-Delegated subagent threads are placed directly below their parent under an =Agents (N)= menu with a small one-column indent. Menus with working or approval-waiting agents open automatically, even under a settled parent; other agent menus start collapsed. Press =RET= or =TAB= on one to toggle its children. Orphaned agent threads whose parent is not in the live shell stay hidden. When the bridge must limit its shell projection, it retains working threads and their parents before older settled threads; the dashboard reports settled-only omissions separately from other truncation. Status dots and colors follow T3's visual hierarchy: sky for working, amber for approvals, red for failures, and muted text for idle/settled rows.
+The chat buffer is on top and the input buffer below.  Type in the input and
+press =C-c C-c= to send.  While the thread is working, =C-c C-c= queues the
+message as a follow-up; =C-c C-s= steers the running turn instead and
+=C-c C-k= aborts it.
 
-Press =RET= on a thread row to open its transcript and a small input window below it. Normal =display-buffer-alist= rules can override the layout. The thread opens following the latest output; reading history disarms follow, and =G= resumes it for that window. Streaming updates preserve item-relative point and window starts rather than erasing the transcript.
+The input header shows the model (click to change), reasoning effort (click
+to cycle), activity phase, context usage, thread title, runtime mode, queued
+messages and a global indicator of working (⚙) and newly finished (✓) threads
+that opens the ledger.
 
-With a bridge advertising =threadSections=, each run has a foldable turn heading. User messages and assistant answers stay visible; tools, reasoning, commands and other activity start under a folded =Work= section. Completed assistant commentary is folded, while active or interrupted assistant output stays readable. Older bridges still provide foldable individual items, without guessed turn boundaries.
+** Composing
 
-| Transcript key | Action |
-|----------------+-----------------------------------------------|
-| =TAB= / =RET= | Toggle the item, work group or turn at point |
-| =S-TAB= | Switch Conversation / Outline |
-| =n= / =p= | Next / previous loaded turn |
-| =M-g i= | Imenu index of loaded turns |
-| =C-s= | Search loaded text, including folded bodies |
-| =G= | Jump to latest and resume follow |
-| =M-w= | Copy visible region text |
-| =C-u M-w= | Copy region including folded text |
-| =m= | Focus the existing input draft |
-| =q= | Hide this frame's thread/input windows |
-| =.= / =a= | Thread actions |
+The input buffer is plain text: use the kill ring, macros, registers and
+spell checking as usual.  =TAB= / =completion-at-point= completes:
 
-Manual fold choices survive streaming, completion and reconnect. Pending approvals, input requests and failures have an attention index outside folded history; =RET= on an index entry reveals its item without performing an action. A matching bridge also reports the total pending request count and up to 20 request details outside the recent-history window. Missing request details are not invented. User-input response support is still a later protocol feature.
+- =/command= at the start of the message: the provider's slash commands
+- =$skill= anywhere: the provider's skills
+- =@path=: project files found by the server
+- =./=, =../=, =~/= and absolute paths: local files
 
-The input buffer is an ordinary editable text buffer, reused per environment/thread. =C-c C-m= selects a provider instance, model, and optional model-specific settings without losing the draft (also available under =.= / =a= → Modes). The composer header shows the model selected for subsequent turns; when active work uses a different model the transcript header also shows the running model. Selection requires a bridge advertising =modelSelection= and the server remains authoritative about whether a started session can switch. =C-c C-c= sends using the displayed dispatch mode, =C-c C-s= steers, and =C-c C-q= queues. Auto may start, steer or queue according to server state. =M-p= / =M-n= recall sent prompts and restore the draft. Acceptance clears only an unchanged draft; edits made during a send and failed sends are retained. =C-c C-k= now hides the composer without deleting its draft. Restart asks for confirmation. Drafts and fold choices last for the buffer lifetime, not across Emacs restarts.
+=M-p= / =M-n= (also =C-<up>= / =C-<down>=) recall sent prompts, =C-r= picks
+one with completion, and =M-<next>= / =M-<prior>= scroll the chat without
+leaving the input.  Drafts survive hiding the window; they last for the
+buffer's lifetime.  Set =t3-code-input-window-display= to =on-demand= to hide
+the input after each send, or =hidden= to open it only when composing.
 
-The transient provides interrupt, approval responses, runtime and interaction modes, settle/reactivate, snooze controls, worktree/VC views, and ID copying. Message sends preserve the thread's current runtime mode; =full-access= is the display fallback for threads without projected policy data. Hiding or killing a view never stops server work; killing releases that view's subscription.
+** Reading
 
-The bridge still supplies a bounded recent timeline, not full history. Search and Outline cover only loaded content. Older-history loading, process-resource controls and terminal streams remain later milestones. Command output can be inspected inside Work, but is not a live terminal. Arbitrary dynamic-tool input/output remains omitted at the bridge boundary because it may contain credentials.
+Each turn starts with a =You= heading followed by the =Assistant= section.
+Answers and plans render as Markdown (=gfm-mode= from markdown-mode when
+installed, otherwise =markdown-ts-mode=) with markup hidden; file changes
+render as diffs.  Tool calls appear inline as =$ command=, =edit path=,
+=search …=; their output is collapsed to =t3-code-tool-preview-lines= lines.
+Reasoning is shown expanded (see =t3-code-thinking-display=).
+
+=RET= visits the file reference at point (=path:12:3=, =path#L12=, Markdown
+links, the path of an =edit= block) in another window, or browses a URL;
+=C-u RET= inverts the window choice.  On a pending question, =RET= answers it
+in the minibuffer; on an attention entry it reveals the request; elsewhere it
+toggles the block.  =!= runs a shell command on the file at point: an
+isolated =*= marks where the file goes, otherwise it is appended, and a
+trailing =&= runs asynchronously.
+
+The chat follows new output; reading history stops following and =G=
+resumes it.  Streaming updates preserve point and window positions.  Only a
+recent window is loaded at first: =o= (or =RET= on the "Older history" line)
+loads earlier pages.  Pending approvals, questions and failures are listed at
+the top of the chat regardless of folding.
+
+** Threads
+
+The ledger (=C-c C-b=, =M-x t3-code-ledger=) lists every thread by project,
+with pinned threads first, settled threads in a collapsed menu at the bottom
+and delegated agents below their parent.  =^= marks pinned, =•= unseen and
+=z= snoozed threads.  In the ledger, =RET= opens, =N= starts a thread in the
+project at point, =+= pins, =v= archives, =/= searches, =j= switches, =r=
+resumes, =s= toggles settled threads and =g= refreshes (=C-u g= restarts the
+bridge).
+
+=C-c C-j= switches to any active thread with completion, grouped by project.
+=C-c C-r= resumes a settled or archived thread of the current project and
+=M-x t3-code-search-threads= searches titles and messages.
+
+=C-c C-n= starts a thread: it asks where to work (project root, a new
+worktree from a base ref, or an existing worktree) and opens an input whose
+first =C-c C-c= launches the thread.  It inherits the current thread's model
+and modes; =C-u C-c C-n= picks the project and model.
+
+=f= in the chat forks the conversation at the turn at point (=C-u f= from
+the latest point) and opens the fork.
+
+Threads that finish, fail or need attention while not visible are announced
+in the echo area; set =t3-code-notify= to =desktop= for desktop
+notifications.  Opening a thread marks it seen.
+
+** Common keys
+
+| Key                | Context | Action                                       |
+|--------------------+---------+----------------------------------------------|
+| =C-c C-c=          | input   | Send, or queue while the thread is working   |
+| =C-c C-s=          | input   | Steer the running turn                       |
+| =C-c C-q=          | input   | Queue explicitly                             |
+| =C-c C-k=          | both    | Abort the running turn                       |
+| =C-c C-p=          | input   | Thread menu (=?= or =.= in the chat)         |
+| =C-c C-m=          | both    | Select provider, model and options           |
+| =C-c C-t=          | both    | Cycle reasoning effort                       |
+| =C-c C-y=          | both    | Copy the last assistant message              |
+| =C-c C-n=          | both    | New thread                                   |
+| =C-c C-r=          | both    | Resume a settled or archived thread          |
+| =C-c C-j=          | both    | Switch thread                                |
+| =C-c C-b=          | both    | Ledger                                       |
+| =M-p= / =M-n=      | input   | Prompt history (=C-r= to search)             |
+| =TAB=              | input   | Complete commands, skills, files and paths   |
+| =M-<next/prior>=   | input   | Scroll the chat                              |
+| =TAB=              | chat    | Fold the tool block, thinking, or turn       |
+| =S-TAB=            | chat    | Switch conversation / outline view           |
+| =RET=              | chat    | Visit file or URL, answer, inspect, or fold  |
+| =!=                | chat    | Shell command on the file at point           |
+| =n= / =p=          | chat    | Next / previous user message (=M-g i= index) |
+| =f=                | chat    | Fork at the turn at point                    |
+| =o=                | chat    | Load older history                           |
+| =i= / =m= / =a=    | chat    | Focus the input (=a= at its end)             |
+| =G=                | chat    | Jump to latest and follow                    |
+| =M-w= / =C-u M-w=  | chat    | Copy visible / raw text                      |
+| =q=                | chat    | Hide the chat and input windows              |
+
+The thread menu also offers approvals (=y=, =Y=, =x=, =X=), answering or
+dismissing questions (=a=, =A=), queued messages (=Q=: edit, cancel, steer
+now, reorder, resume), runtime and plan modes, rename (=C-u N= regenerates
+the title), pin, settle, snooze, archive and delete, the worktree in Dired,
+VC status, and copying IDs.
+
+** Hooks
+
+=t3-code-activity-phase-functions= runs with =(CHAT INPUT OLD NEW)= when a
+thread's phase changes between ="idle"=, ="thinking"=, ="replying"=,
+="running"= and ="waiting"=.  =t3-code-shell-update-functions= runs with
+=(ENVIRONMENT OLD NEW)= shell payloads.
+
+* Limits
+
+The bridge keeps payloads below Emacs's 1 MiB line limit: the live window
+holds the 100 most recent items and a bounded amount of text, and history
+pages have the same bounds.  Search and outline cover loaded content only.
+Arbitrary dynamic-tool input/output is omitted at the bridge because it may
+contain credentials.  Command output is shown in the transcript, not as a
+live terminal.  Hiding or killing a view never stops server work.
 
 * Development
 
 #+begin_src sh
-make check
+make check            # byte-compile and ERT, using the fake bridge
+make check-t3code     # also the adjacent T3 bridge's tests and real startup
 #+end_src
 
 See [[file:docs/protocol-v1.md][the protocol v1 specification]].
 
 * Compatibility policy
 
-The bridge handshake reports its own version, pinned T3 revision, server version, environment identity, and discovered capabilities. Emacs never decodes raw Effect RPC or raw T3 schemas. Unsupported capabilities remain hidden rather than inferred from a package version.
+The bridge handshake reports its own version, pinned T3 revision, server
+version, environment identity, and capabilities.  Emacs never decodes raw
+Effect RPC; it offers features only when the bridge advertises them
+(=modelSelection=, =threadLifecycle=, =composerCompletion=).

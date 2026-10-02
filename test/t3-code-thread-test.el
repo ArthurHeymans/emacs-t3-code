@@ -23,21 +23,27 @@
                      :detail nil :streaming :false)
                     (:id "command" :type "command_execution" :status "completed"
                      :label "Command" :title "Tests" :text "make check"
-                     :detail "23 tests passed" :streaming :false))
+                     :detail "line 1\nline 2\nline 3\nline 4\nline 5\n23 tests passed"
+                     :streaming :false))
             :truncated :false))
-    (plist-put t3-code-thread--payload :truncated t)
     (t3-code-thread--refresh)
     (goto-char (+ (point-min) 10))
     (let ((position (point)))
       (t3-code-thread--refresh)
       (should (= (point) position)))
-    (should (string-match-p "You" (t3-code-test--visible-text)))
-    (should (string-match-p "Please fix it" (buffer-string)))
-    (should-not (string-match-p "Inspect first" (t3-code-test--visible-text)))
+    (should (string-match-p "^You$" (t3-code-test--visible-text)))
+    (should (string-match-p "Please fix it" (t3-code-test--visible-text)))
+    ;; Reasoning is shown like an ordinary paragraph by default.
+    (should (string-match-p "Inspect first" (t3-code-test--visible-text)))
+    ;; Tool output collapses to a preview with a count of the hidden rest.
+    (should (string-match-p "\\$ make check" (t3-code-test--visible-text)))
+    (should (string-match-p "line 4" (t3-code-test--visible-text)))
+    (should (string-match-p "2 more lines" (t3-code-test--visible-text)))
     (should-not (string-match-p "23 tests passed" (t3-code-test--visible-text)))
     (should (t3-code-thread--goto-item "command"))
     (t3-code-thread-toggle-details)
     (should (string-match-p "23 tests passed" (t3-code-test--visible-text)))
+    (should-not (string-match-p "more lines" (t3-code-test--visible-text)))
     (should (equal (t3-code-thread--item-at-point) "command"))
     (t3-code-thread-toggle-details)
     (should-not (string-match-p "23 tests passed" (t3-code-test--visible-text)))))
@@ -69,8 +75,10 @@
     (let ((input (t3-code-thread--send-input "thread-1" "hello" "auto")))
       (should-not (plist-member input :runtimeMode))
       (should-not (plist-member input :interactionMode)))
-    (should (eq (lookup-key t3-code-thread-mode-map (kbd "a"))
+    (should (eq (lookup-key t3-code-thread-mode-map (kbd "?"))
                 #'t3-code-thread-actions))
+    (should (eq (lookup-key t3-code-compose-mode-map (kbd "C-c C-k"))
+                #'t3-code-compose-abort))
     (should (eq (lookup-key t3-code-compose-mode-map (kbd "C-c C-c"))
                 #'t3-code-compose-send))
     (let ((suffix (transient-get-suffix 't3-code-thread-actions "q")))
@@ -104,7 +112,7 @@
                      (should (equal operation "model.catalog"))
                      (funcall callback catalog nil)))
                   ((symbol-function 'run-at-time)
-                   (lambda (_delay _repeat callback) (funcall callback)))
+                   (lambda (_delay _repeat callback &rest args) (apply callback args)))
                   ((symbol-function 'completing-read)
                    (lambda (&rest _args) (pop answers)))
                   ((symbol-function 't3-code-thread--request)
@@ -189,7 +197,8 @@
      :items ((:id "user" :runId "run-1" :runStatus "completed" :runOrdinal 1
               :type "user_message" :label "You" :text "Fix the folds")
              (:id "tool" :runId "run-1" :type "command_execution" :label "Command"
-              :text "make test" :detail "test output" :status "completed")
+              :text "make test" :detail "head 1\nhead 2\nhead 3\nhead 4\nhead 5\ntest output"
+              :status "completed")
              (:id "answer" :runId "run-1" :type "assistant_message" :label "Assistant"
               :text "Folding now works." :status "completed")
              (:id "approval" :runId "run-1" :type "approval_request" :label "Approval"
@@ -200,20 +209,29 @@
     (t3-code-thread-mode)
     (setq t3-code-thread--payload (t3-code-test--section-payload))
     (t3-code-thread--refresh)
+    (should (string-match-p "You · turn 1" (t3-code-test--visible-text)))
+    (should (string-match-p "Fix the folds" (t3-code-test--visible-text)))
+    (should (string-match-p "^Assistant$" (t3-code-test--visible-text)))
     (should (string-match-p "Folding now works" (t3-code-test--visible-text)))
     (should-not (string-match-p "test output" (t3-code-test--visible-text)))
-    (goto-char (car (gethash "work:run-1" t3-code-thread--positions)))
-    (t3-code-thread-toggle-details)
-    (should (string-match-p "Command" (t3-code-test--visible-text)))
     (t3-code-thread--goto-item "tool")
     (t3-code-thread-toggle-details)
     (should (string-match-p "test output" (t3-code-test--visible-text)))
     (t3-code-thread-toggle-details)
-    (setf (plist-get (nth 1 (plist-get t3-code-thread--payload :items)) :detail) "late output")
+    (setf (plist-get (nth 1 (plist-get t3-code-thread--payload :items)) :detail)
+          "head 1\nhead 2\nhead 3\nhead 4\nhead 5\nlate output")
     (t3-code-thread--refresh)
     (should-not (string-match-p "late output" (t3-code-test--visible-text)))
+    ;; Folding the assistant section from inside an unfoldable answer.
+    (goto-char (car (gethash "item:answer:body" t3-code-thread--positions)))
+    (t3-code-thread-toggle-details)
+    (should-not (string-match-p "Folding now works" (t3-code-test--visible-text)))
+    (should (string-match-p "You · turn 1" (t3-code-test--visible-text)))
+    (t3-code-thread-toggle-details)
+    (should (string-match-p "Folding now works" (t3-code-test--visible-text)))
     (cl-letf (((symbol-function 'message) #'ignore)) (t3-code-thread-cycle-view))
     (should-not (string-match-p "Folding now works" (t3-code-test--visible-text)))
+    (should (string-match-p "You · turn 1 …" (t3-code-test--visible-text)))
     (should (string-match-p "! Approval" (t3-code-test--visible-text)))
     (goto-char (car (gethash "attention:approval" t3-code-thread--positions)))
     (t3-code-thread-inspect)
@@ -272,7 +290,7 @@
     (t3-code-thread-mode)
     (setq t3-code-thread--payload (t3-code-test--section-payload))
     (t3-code-thread--refresh)
-    (let* ((position (car (gethash "item:tool:body" t3-code-thread--positions)))
+    (let* ((position (car (gethash "item:tool:rest" t3-code-thread--positions)))
            (hidden (seq-filter (lambda (overlay) (overlay-get overlay 'invisible))
                                (overlays-at position))))
       (should (invisible-p position))
@@ -295,7 +313,8 @@
       (should (string-match-p "test output" (car kill-ring))))
     (let ((isearch-mode t)
           (before (buffer-string)))
-      (setf (plist-get (nth 1 (plist-get t3-code-thread--payload :items)) :detail) "search-time update")
+      (setf (plist-get (nth 1 (plist-get t3-code-thread--payload :items)) :detail)
+            "head 1\nhead 2\nhead 3\nhead 4\nhead 5\nsearch-time update")
       (t3-code-thread--refresh)
       (should (equal (buffer-string) before)))
     (run-hooks 'isearch-mode-end-hook)
@@ -309,8 +328,11 @@
           '(:items ((:id "one" :type "user_message" :label "You" :text "Hi")
                     (:id "two" :type "assistant_message" :label "Assistant" :text "Hello"))))
     (t3-code-thread--refresh)
-    (should-not (string-match-p "Turn" (buffer-string)))
-    (should (string-match-p "Hello" (t3-code-test--visible-text)))))
+    (should-not (string-match-p "turn" (buffer-string)))
+    (should (string-match-p "^You$" (t3-code-test--visible-text)))
+    (should (string-match-p "^Assistant$" (t3-code-test--visible-text)))
+    (should (string-match-p "Hello" (t3-code-test--visible-text)))
+    (should (equal (mapcar #'car (t3-code-thread--imenu)) '("You · Hi")))))
 
 (ert-deftest t3-code-test-composer-reuses-draft-and-preserves-inflight-edits ()
   (save-window-excursion
@@ -348,6 +370,191 @@
                 (should (string-empty-p (buffer-string))))))
         (when (buffer-live-p composer) (kill-buffer composer))
         (kill-buffer origin)))))
+
+(defmacro t3-code-test--with-chat (payload &rest body)
+  "Run BODY in a ready chat buffer showing PAYLOAD, capturing requests.
+Requests are collected in `requests' as (OPERATION INPUT), newest first."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (t3-code-thread-mode)
+     (setq t3-code-thread--environment
+           (t3-code-environment-create
+            :id "test" :state 'ready
+            :capabilities '(:mutations t :modelSelection t :threadLifecycle t))
+           t3-code-thread--thread-id "thread-1"
+           t3-code-thread--payload ,payload)
+     (t3-code-thread--refresh)
+     (let (requests)
+       (cl-letf (((symbol-function 't3-code-request)
+                  (lambda (_environment operation input callback)
+                    (push (list operation input) requests)
+                    (funcall callback '(:sequence 1) nil)))
+                 ((symbol-function 'message) #'ignore))
+         ,@body))))
+
+(ert-deftest t3-code-test-thread-answers-input-with-option-values ()
+  (t3-code-test--with-chat
+      (copy-tree
+       '(:thread (:id "thread-1")
+         :items ((:id "ask" :type "user_input_request" :status "waiting" :actionId "input-1"
+                  :label "Input needed" :text "Scope: Which?"
+                  :questions ((:id "q1" :header "Scope" :question "Which?"
+                               :allowCustomAnswer :false
+                               :options ((:label "UDP" :description "fast" :value "udp")
+                                         (:label "DoH" :description "fallback" :value "doh ")))
+                              (:id "q2" :header "Extras" :question "Also?" :multiSelect t
+                               :options ((:label "Tests" :description "" :value "tests")
+                                         (:label "Docs" :description "" :value "docs"))))))))
+    (should (string-match-p "RET to answer" (buffer-string)))
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "DoH"))
+              ((symbol-function 'completing-read-multiple) (lambda (&rest _) '("Tests" "custom"))))
+      (t3-code-thread--goto-item "ask")
+      (t3-code-thread-ret))
+    (pcase-let ((`(,operation ,input) (car requests)))
+      (should (equal operation "thread.command"))
+      (let* ((command (plist-get input :command))
+             (answers (plist-get command :answers)))
+        (should (equal (plist-get command :type) "runtime-request.respond"))
+        (should (equal (plist-get command :requestId) "input-1"))
+        (should (equal (gethash "q1" answers) "doh "))
+        (should (equal (gethash "q2" answers) ["tests" "custom"]))
+        (should (string-match-p "\"q1\":\"doh \"" (json-serialize input)))))))
+
+(ert-deftest t3-code-test-thread-cycles-reasoning-effort ()
+  (let ((catalog '(:providers ((:instanceId "codex"
+                                :models ((:slug "gpt" :options
+                                          ((:id "reasoningEffort" :type "select"
+                                            :choices ((:id "low") (:id "medium" :isDefault t)
+                                                      (:id "high"))))))))))
+        (selection '(:instanceId "codex" :model "gpt")))
+    (let ((next (t3-code-thread--next-effort catalog selection)))
+      (should (equal (t3-code-thread--effort next) "high"))
+      (should (equal (t3-code-thread--effort (t3-code-thread--next-effort catalog next))
+                     "low")))
+    (should-error (t3-code-thread--next-effort '(:providers nil) selection)
+                  :type 'user-error)))
+
+(ert-deftest t3-code-test-compose-queues-while-busy-and-starts-when-idle ()
+  (let ((chat (generate-new-buffer " *t3-chat*")))
+    (unwind-protect
+        (with-temp-buffer
+          (t3-code-compose-mode)
+          (setq t3-code-compose--origin-buffer chat)
+          (with-current-buffer chat
+            (t3-code-thread-mode)
+            (setq t3-code-thread--payload '(:thread (:status "idle"))))
+          (should (equal (t3-code-compose--default-mode) "auto"))
+          (with-current-buffer chat
+            (setq t3-code-thread--payload '(:thread (:status "running" :activeRunId "run"))))
+          (should (equal (t3-code-compose--default-mode) "queue"))
+          (setq t3-code-compose--dispatch-mode "steer")
+          (should (equal (t3-code-compose--default-mode) "steer")))
+      (kill-buffer chat))))
+
+(ert-deftest t3-code-test-thread-loads-older-history-before-first-item ()
+  (t3-code-test--with-chat
+      (copy-tree '(:thread (:id "thread-1") :hasOlderHistory t
+                   :items ((:id "new" :type "assistant_message" :text "Newest"))))
+    (should (string-match-p "Older history available" (buffer-string)))
+    (cl-letf (((symbol-function 't3-code-request)
+               (lambda (_environment operation input callback)
+                 (push (list operation input) requests)
+                 (funcall callback
+                          '(:items ((:id "old" :type "assistant_message" :text "Oldest"))
+                            :hasMore :false)
+                          nil))))
+      (goto-char (car (gethash "history" t3-code-thread--positions)))
+      (t3-code-thread-ret))
+    (should (equal (car requests)
+                   '("thread.history" (:threadId "thread-1" :beforeItemId "new"))))
+    (should-not (string-match-p "Older history" (buffer-string)))
+    (should (< (string-search "Oldest" (buffer-string))
+               (string-search "Newest" (buffer-string))))))
+
+(ert-deftest t3-code-test-thread-forks-at-turn-at-point ()
+  (t3-code-test--with-chat (t3-code-test--section-payload)
+    (t3-code-thread--goto-item "answer")
+    (cl-letf (((symbol-function 't3-code-thread-open) #'ignore))
+      (t3-code-thread-fork))
+    (pcase-let ((`(,operation ,input) (car requests)))
+      (should (equal operation "thread.fork"))
+      (should (equal (plist-get input :runId) "run-1"))
+      (should (plist-get input :targetThreadId)))
+    (cl-letf (((symbol-function 't3-code-thread-open) #'ignore))
+      (t3-code-thread-fork t))
+    (should (plist-member (cadr (car requests)) :runId))
+    (should-not (plist-get (cadr (car requests)) :runId))))
+
+(ert-deftest t3-code-test-thread-parses-and-visits-file-locations ()
+  (should (equal (t3-code-thread--parse-location "`src/app.el:12:3`,")
+                 '("src/app.el" 12 3)))
+  (should (equal (t3-code-thread--parse-location "src/app.el#L12-L20")
+                 '("src/app.el" 12 nil)))
+  (should (equal (t3-code-thread--parse-location "README.org") '("README.org" nil nil)))
+  (let* ((root (make-temp-file "t3-root" t))
+         (file (expand-file-name "notes.txt" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "one\ntwo\nthree\n"))
+          (should (equal (t3-code-thread--resolve-file "notes.txt:2" root) (list file 2 nil)))
+          (should-not (t3-code-thread--resolve-file "missing.txt" root))
+          (should-not (t3-code-thread--resolve-file "https://example.com" root)))
+      (delete-directory root t)))
+  (should (equal (t3-code-thread--substitute-file "wc -l * | sort" "/tmp/a b")
+                 (concat "wc -l " (shell-quote-argument "/tmp/a b") " | sort")))
+  (should (equal (t3-code-thread--substitute-file "head -n2" "/tmp/x") "head -n2 /tmp/x")))
+
+(ert-deftest t3-code-test-thread-reports-activity-phase-changes ()
+  (let (calls)
+    (let ((t3-code-activity-phase-functions
+           (list (lambda (_chat _input old new) (push (list old new) calls)))))
+      (with-temp-buffer
+        (t3-code-thread-mode)
+        (setq t3-code-thread--payload
+              '(:thread (:status "running" :activeRunId "r")
+                :items ((:id "r" :type "reasoning" :streaming t :text "hm"))))
+        (t3-code-thread--refresh)
+        (setq t3-code-thread--payload '(:thread (:status "idle") :items nil))
+        (t3-code-thread--refresh)))
+    (should (equal (nreverse calls) '(("idle" "thinking") ("thinking" "idle"))))))
+
+(ert-deftest t3-code-test-launch-input-creates-thread-with-first-message ()
+  (save-window-excursion
+    (let* ((environment (t3-code-environment-create
+                         :id "launch" :state 'ready
+                         :capabilities '(:mutations t :threadLifecycle t)))
+           (launch (list :projectId "project-1" :projectName "owner/repo"
+                         ;; As parsed from a payload: JSON arrays arrive as lists.
+                         :modelSelection '(:instanceId "codex" :model "gpt"
+                                           :options ((:id "reasoningEffort" :value "high")))
+                         :runtimeMode "full-access" :interactionMode "default"
+                         :workspaceStrategy '(:type "root")))
+           (input (t3-code-compose-open-launch environment launch))
+           request opened)
+      (unwind-protect
+          (with-current-buffer input
+            (insert "Build the resolver")
+            (should (string-match-p "New thread.*owner/repo.*project root"
+                                    (t3-code-compose--header-line)))
+            (cl-letf (((symbol-function 't3-code-request)
+                       (lambda (_environment operation input callback)
+                         (setq request (list operation input))
+                         (should (string-match-p "\"options\":\\[{\"id\""
+                                                 (json-serialize input)))
+                         (funcall callback '(:threadId "thread-new") nil)))
+                      ((symbol-function 't3-code-thread-open)
+                       (lambda (_environment thread)
+                         (setq opened thread)
+                         (generate-new-buffer " *opened*"))))
+              (t3-code-compose-send))
+            (should (equal (car request) "thread.create"))
+            (should (equal (plist-get (cadr request) :text) "Build the resolver"))
+            (should (equal (plist-get (cadr request) :projectId) "project-1"))
+            (should (equal (plist-get (cadr request) :workspaceStrategy) '(:type "root")))
+            (should-not (plist-member (cadr request) :projectName))
+            (should (equal (plist-get opened :id) "thread-new"))
+            (should-not (buffer-live-p input)))
+        (when (buffer-live-p input) (kill-buffer input))))))
 
 (provide 't3-code-thread-test)
 ;;; t3-code-thread-test.el ends here

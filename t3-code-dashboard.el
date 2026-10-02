@@ -10,6 +10,7 @@
 (require 'seq)
 (require 'tabulated-list)
 (require 't3-code-core)
+(require 't3-code-shell)
 (require 't3-code-thread)
 
 (defcustom t3-code-dashboard-collapse-settled t
@@ -146,9 +147,23 @@
              (propertize (or (plist-get project :name) "")
                          'face 't3-code-dashboard-project-face))
            (t3-code-dashboard--status (plist-get thread :status))
-           (if (eq (plist-get thread :settled) t)
-               (propertize "settled" 'face 't3-code-dashboard-settled-face)
-             (propertize "active" 'face 'success))
+           (concat
+            (if (eq (plist-get thread :settled) t)
+                (propertize "settled" 'face 't3-code-dashboard-settled-face)
+              (propertize "active" 'face 'success))
+            (if (eq (plist-get thread :pinned) t)
+                (propertize " ^" 'face 't3-code-dashboard-project-face
+                            'help-echo "Pinned")
+              "")
+            (if (eq (plist-get thread :unread) t)
+                (propertize " •" 'face 't3-code-dashboard-running-face
+                            'help-echo "Finished since last visit")
+              "")
+            (if (plist-get thread :snoozedUntil)
+                (propertize " z" 'face 'shadow
+                            'help-echo (format "Snoozed until %s"
+                                               (plist-get thread :snoozedUntil)))
+              ""))
            (propertize (concat prefix (or (plist-get thread :title) thread-id ""))
                        'face (if (> depth 0) 'font-lock-doc-face 'default))
            (propertize (or (plist-get thread :provider) "")
@@ -275,7 +290,9 @@
                 (if (and (eq (plist-get thread :settled) t)
                          (not (t3-code-dashboard--working-descendant-p thread children)))
                     settled active)))))
-    (setq active (nreverse active)
+    ;; Pinned threads lead the active section, as in the web sidebar.
+    (setq active (seq-sort-by (lambda (row) (if (eq (plist-get (cdr row) :pinned) t) 0 1))
+                              #'< (nreverse active))
           settled (nreverse settled))
     (append
      (when t3-code-dashboard--shell-truncated
@@ -422,6 +439,49 @@ token).  Plain refresh never asks for a token, even after a disconnect."
                          t3-code-dashboard--subscription)
     (setq t3-code-dashboard--subscription nil)))
 
+(defun t3-code-dashboard--thread-at-point ()
+  "Return the normalized thread on the current row."
+  (or (t3-code-dashboard--find-thread (tabulated-list-get-id))
+      (user-error "No T3 thread at point")))
+
+(defun t3-code-dashboard--dispatch (type message)
+  "Dispatch command TYPE for the thread at point, reporting MESSAGE."
+  (let ((thread (t3-code-dashboard--thread-at-point)))
+    (t3-code-shell-dispatch t3-code-dashboard--environment
+                            (list :type type :threadId (plist-get thread :id))
+                            (lambda (_result error)
+                              (message (if error "T3 %s failed: %s" "%s")
+                                       (if error type message)
+                                       (or (plist-get error :message) error))))))
+
+(defun t3-code-dashboard-toggle-pin ()
+  "Pin or unpin the thread at point."
+  (interactive)
+  (if (eq (plist-get (t3-code-dashboard--thread-at-point) :pinned) t)
+      (t3-code-dashboard--dispatch "thread.unpin" "T3 thread unpinned")
+    (t3-code-dashboard--dispatch "thread.pin" "T3 thread pinned")))
+
+(defun t3-code-dashboard-archive ()
+  "Archive the thread at point."
+  (interactive)
+  (t3-code-dashboard--dispatch "thread.archive" "T3 thread archived"))
+
+(declare-function t3-code-new-thread "t3-code" (&optional arg))
+(declare-function t3-code-switch-thread "t3-code" ())
+(declare-function t3-code-search-threads "t3-code" (query))
+(declare-function t3-code-resume "t3-code" ())
+
+(defun t3-code-dashboard-new-thread (&optional arg)
+  "Start a thread in the project at point; ARG as in `t3-code-new-thread'."
+  (interactive "P")
+  (let ((default-directory
+         (or (when-let* ((thread (t3-code-dashboard--find-thread (tabulated-list-get-id)))
+                         (path (plist-get thread :path))
+                         ((file-directory-p path)))
+               (file-name-as-directory path))
+             default-directory)))
+    (t3-code-new-thread arg)))
+
 (defvar-keymap t3-code-dashboard-mode-map
   :parent tabulated-list-mode-map
   "RET" #'t3-code-dashboard-open-thread
@@ -429,6 +489,15 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   "<tab>" #'t3-code-dashboard-toggle-at-point
   "g" #'t3-code-dashboard-reconnect
   "s" #'t3-code-dashboard-toggle-settled
+  "N" #'t3-code-dashboard-new-thread
+  "+" #'t3-code-dashboard-toggle-pin
+  "v" #'t3-code-dashboard-archive
+  "/" #'t3-code-search-threads
+  "j" #'t3-code-switch-thread
+  "r" #'t3-code-resume
+  "C-c C-n" #'t3-code-dashboard-new-thread
+  "C-c C-j" #'t3-code-switch-thread
+  "C-c C-r" #'t3-code-resume
   "q" #'t3-code-dashboard-quit)
 
 ;; Keep reloads useful while iterating in a live dashboard buffer: `defvar-keymap'
@@ -441,7 +510,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (setq tabulated-list-format
         [("Project" 36 nil)
          ("State" 8 nil)
-         ("Life" 8 nil)
+         ("Life" 13 nil)
          ("Thread" 36 nil)
          ("Provider" 10 nil)
          ("Model" 18 nil)
@@ -467,6 +536,10 @@ token).  Plain refresh never asks for a token, even after a disconnect."
       (unless (derived-mode-p 't3-code-dashboard-mode)
         (t3-code-dashboard-mode))
       (setq t3-code-dashboard--environment environment)
+      ;; A shared subscription does not replay its snapshot to new views.
+      (when-let* ((shell (t3-code-environment-shell environment)))
+        (unless t3-code-dashboard--projects
+          (t3-code-dashboard--on-shell-message (list :kind "snapshot" :payload shell))))
       (unless t3-code-dashboard--subscription
         (setq t3-code-dashboard--subscription
               (t3-code-subscribe environment "shell" nil

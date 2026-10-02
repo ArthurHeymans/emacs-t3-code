@@ -52,7 +52,11 @@ bridge included in the repository."
   capabilities server-version bridge-version pinned-t3-version
   (pending (make-hash-table :test #'equal))
   (subscriptions (make-hash-table :test #'equal))
-  (next-id 0) outbound-queue diagnostics exit-error fatal-error)
+  (next-id 0) outbound-queue diagnostics exit-error fatal-error
+  ;; Latest normalized shell projection, kept by `t3-code-shell'.
+  shell shell-reference
+  ;; Request results that rarely change (model catalog, provider commands).
+  (cache (make-hash-table :test #'equal)))
 
 (cl-defstruct (t3-code-subscription
                (:constructor t3-code-subscription-create))
@@ -499,6 +503,38 @@ CALLBACK receives (RESULT ERROR).  Mutations are not retried by this layer."
     (t3-code--send environment
                    (list :kind "request" :id id :operation operation :input input))
     id))
+
+(defun t3-code-capability-p (environment capability)
+  "Whether ENVIRONMENT's bridge advertises CAPABILITY (a keyword)."
+  (and environment
+       (eq (plist-get (t3-code-environment-capabilities environment) capability) t)))
+
+(defun t3-code-request-sync (environment operation input &optional timeout)
+  "Call OPERATION with INPUT in ENVIRONMENT and wait up to TIMEOUT seconds.
+Return the result, or signal a `user-error' on failure or timeout.  Only for
+short reads such as completion candidates; mutations stay asynchronous."
+  (let* ((done nil) result failure
+         (id (t3-code-request environment operation input
+                              (lambda (value error)
+                                (setq result value failure error done t))))
+         (deadline (+ (float-time) (or timeout 3))))
+    (while (and (not done) (< (float-time) deadline))
+      (accept-process-output nil 0.02))
+    (unless done
+      (t3-code-cancel-request environment id)
+      (user-error "T3 %s timed out" operation))
+    (when failure
+      (user-error "T3 %s failed: %s" operation (or (plist-get failure :message) failure)))
+    result))
+
+(defun t3-code-new-id (&optional prefix)
+  "Return a fresh random identifier, optionally starting with PREFIX.
+Used for client-supplied command, message and thread IDs."
+  (let ((hex (secure-hash 'sha256 (format "%s:%s:%s" (emacs-pid) (float-time) (random)))))
+    (concat (or prefix "")
+            (format "%s-%s-4%s-%s-%s"
+                    (substring hex 0 8) (substring hex 8 12) (substring hex 13 16)
+                    (substring hex 16 20) (substring hex 20 32)))))
 
 (defun t3-code-cancel-request (environment id)
   "Cancel pending request ID in ENVIRONMENT."

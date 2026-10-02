@@ -86,6 +86,11 @@ The M0/M1 shell snapshot payload is:
       "settled": false,
       "parentThreadId": null,
       "relationshipToParent": null,
+      "branch": "feature/x",
+      "updatedAt": "2026-06-20T00:00:00.000Z",
+      "pinned": false,
+      "snoozedUntil": null,
+      "unread": false,
       "additions": 1,
       "deletions": 2
     }]
@@ -94,7 +99,7 @@ The M0/M1 shell snapshot payload is:
 }
 ```
 
-This is a view model, not a serialization of T3 contracts. During M1, shell `event` records carry the same replacement projection shape as snapshots, allowing the bridge to reduce and coalesce raw server updates without moving T3 reducer schemas into Elisp. An empty `projects` array is authoritative. Future fields remain optional. Future semantic item kinds must have bounded generic rendering in Emacs. When truncated, newer bridges also report `omittedSettledCount`, `omittedOtherCount`, and `omittedProjectCount`; consumers must treat absent counts from older bridges as unknown, not zero.
+This is a view model, not a serialization of T3 contracts. During M1, shell `event` records carry the same replacement projection shape as snapshots, allowing the bridge to reduce and coalesce raw server updates without moving T3 reducer schemas into Elisp. An empty `projects` array is authoritative. `unread` marks a latest run that completed after the server-tracked last visit (false when the server does not track visits). Future fields remain optional. Future semantic item kinds must have bounded generic rendering in Emacs. When truncated, newer bridges also report `omittedSettledCount`, `omittedOtherCount`, and `omittedProjectCount`; consumers must treat absent counts from older bridges as unknown, not zero.
 
 ## Normalized thread projection
 
@@ -112,11 +117,14 @@ A `thread` subscription uses the thread ID as its identity and emits replacement
     "activeRunModel": null,
     "activeRunProvider": null,
     "hasStartedSession": false,
+    "projectId": "project-id",
     "worktree": "root",
     "worktreePath": null,
+    "branch": null,
     "runtimeMode": "full-access",
     "interactionMode": "default",
-    "activeRunId": null
+    "activeRunId": null,
+    "tokenUsage": { "usedTokens": 1200, "maxTokens": 128000 }
   },
   "items": [{
     "id": "item-id",
@@ -135,6 +143,8 @@ A `thread` subscription uses the thread ID as its identity and emits replacement
   }],
   "attention": [],
   "pendingRequestCount": 0,
+  "queued": [{ "runId": "run-2", "position": 1, "held": false, "text": "…" }],
+  "hasOlderHistory": false,
   "truncated": false
 }
 ```
@@ -150,6 +160,10 @@ Bridges advertising `threadSections: true` add `runId`, `runStatus`, `runOrdinal
 `presentation: "work"` identifies earlier assistant commentary in a completed run; the last assistant item remains `"message"`. This follows T3's last-assistant-per-run presentation, not a provider-declared final-answer flag. Running, interrupted or unclassified messages remain readable. Other tools are grouped by their existing normalized item type. No attempt-level fold metadata is currently exposed.
 
 `pendingRequestCount` counts all pending runtime requests. `attention` separately retains up to 20 pending approval/user-input items available in the authoritative projection, even outside the 100-item timeline window, with text capped to 2,000 UTF-8 bytes per item and no detail body. The count can exceed the supplied details; consumers must not invent missing requests or assume the list is complete. Existing frame limits still apply. A `user_input_request` action ID is not an approval ID; answering these requests needs a future normalized operation.
+
+`file_change` items carry the changed `path`. Pending `user_input_request` items carry structured `questions` (`id`, `header`, `question`, `multiSelect`, `allowCustomAnswer`, and up to 32 `options` with `label`, `description` and the exact `value` to answer with). `tokenUsage` is the provider's latest context report, or null. `queued` lists up to 50 queued follow-up messages in queue order; `held` marks a queue paused after a restart.
+
+`hasOlderHistory` is true when items older than the first supplied item exist, either because the bridge trimmed its window or because the server's bounded snapshot has more history. A bridge advertising `threadLifecycle: true` answers `thread.history` with `{threadId, beforeItemId}` by returning `{items, hasMore}`: up to 100 chronological items immediately before `beforeItemId`, normalized and bounded like the live window. Clients page backwards from their oldest loaded item; live replacements never include history pages.
 
 Folds are client-local state, not lifecycle commands. Folding never stops a run, and expanding cannot recover text omitted by the bridge's bounds. Full history pagination and resource log/control streams are not in this protocol slice.
 
@@ -168,7 +182,20 @@ Pairing requests both `orchestration:read` and `orchestration:operate`. Mutation
 
 A bridge advertising `modelSelection: true` also supports `model.catalog` (a bounded request result with provider instance IDs, display names, availability, model slugs and select/boolean option descriptors). The thread projection carries the selected `modelSelection` and the active run's `activeRunProvider` / `activeRunModel` (when present). `hasStartedSession` helps clients explain providers that require a new thread for model changes. An older bridge has none of these fields or operations; clients must not offer selection without the capability.
 
-Request failures are returned as bounded response errors and do not terminate the shared bridge process. Raw orchestration command schemas remain private to the version-matched bridge.
+### Thread lifecycle
+
+A bridge advertising `threadLifecycle: true` also supports:
+
+- `thread.create`: `{commandId, projectId, title?, text, modelSelection, runtimeMode, interactionMode, workspaceStrategy}` launches a thread with its first message and returns `{threadId}`. `workspaceStrategy` is `{type: "root"}`, `{type: "worktree", baseRef, branch?, startFromOrigin?}` or `{type: "existing_worktree", worktreePath, branch?}`. Without a title the server generates one.
+- `thread.fork`: `{threadId, commandId, targetThreadId, runId}` forks at a run, or at the latest stable point when `runId` is null, and returns `{threadId}`. The client supplies `targetThreadId` so an ambiguous retry cannot create two forks.
+- `thread.command`: `{command}` dispatches one allowlisted orchestration command verbatim after validating it against the version-matched command schema: `thread.archive`, `thread.unarchive`, `thread.delete`, `thread.pin`, `thread.unpin`, `thread.visit`, `thread.mark-unread`, `thread.metadata.update` (title or `regenerateTitle` only), `queued-run.cancel`, `queued-run.edit`, `queued-run.reorder`, `queued-message.promote-to-steer`, `queue.resume`, `runtime-request.respond` and `thread.user-input.dismiss`. User-input answers map question IDs to the option `value` (or custom text), with arrays for multi-select questions. Anything else fails with `unsupported-command`.
+- `thread.history`: see above.
+- `thread.search`: `{query, limit?}` returns `{matches: [{threadId, projectId, source, snippet}]}`.
+- `threads.archived`: returns up to 500 archived threads, newest first, as `{threads: [{id, title, projectId, projectName, provider, model, updatedAt}]}`.
+
+A bridge advertising `composerCompletion: true` supports `provider.commands` (`{instanceId}` → `{slashCommands: [{name, description}], skills: [{name, description, userInvocationOnly}]}`) and `project.searchEntries` (`{cwd, query, limit?}` → `{entries: [{path, kind}], truncated}`).
+
+Request failures are returned as bounded response errors and do not terminate the shared bridge process. Thread creation, sends and other operations needing bridge-side state keep dedicated normalized operations; only the allowlisted commands above cross the boundary in their T3 form.
 
 ## Backpressure and coalescing
 

@@ -87,8 +87,20 @@
                          "add doh fallback resolver"))
           (should (equal (mapcar (lambda (item) (plist-get item :type))
                                  (plist-get thread-snapshot :items))
-                         '("user_message" "reasoning" "command_execution"
-                           "assistant_message" "approval_request"))))
+                         '("user_message" "reasoning" "command_execution" "file_change"
+                           "assistant_message" "approval_request" "user_input_request")))
+          (should (equal (plist-get (t3-code-request-sync environment "provider.commands"
+                                                          '(:instanceId "codex"))
+                                    :skills)
+                         '((:name "deploy" :description "Ship a release"
+                            :userInvocationOnly :false))))
+          (should (equal (mapcar (lambda (item) (plist-get item :id))
+                                 (plist-get (t3-code-request-sync
+                                             environment "thread.history"
+                                             '(:threadId "thread-doh"
+                                               :beforeItemId "item-user-1"))
+                                            :items))
+                         '("item-old-user" "item-old-answer"))))
       (when shell-reference (t3-code-unsubscribe environment shell-reference))
       (when thread-reference (t3-code-unsubscribe environment thread-reference))
       (t3-code-disconnect environment)
@@ -210,12 +222,12 @@
                (lambda (_environment &optional credential)
                  (push credential credentials)))
               ((symbol-function 't3-code-dashboard) #'ignore))
-      (t3-code "http://127.0.0.1:3773")
+      (t3-code--environment "http://127.0.0.1:3773")
       (let ((t3-code-token "configured-token")
             (t3-code-token-type 'bearer))
-        (t3-code "http://127.0.0.1:3773"))
+        (t3-code--environment "http://127.0.0.1:3773"))
       (let ((t3-code-token nil))
-        (t3-code "http://127.0.0.1:3773"))
+        (t3-code--environment "http://127.0.0.1:3773"))
       (should (equal (nreverse credentials)
                      '((pairing . "asked-token")
                        (bearer . "configured-token") nil)))
@@ -230,7 +242,7 @@
               ((symbol-function 'read-passwd)
                (lambda (&rest _) (ert-fail "Should not prompt for live bridge")))
               ((symbol-function 't3-code-dashboard) #'ignore))
-      (t3-code "live"))))
+      (t3-code--environment "live"))))
 
 (ert-deftest t3-code-test-connect-prompt-scopes-credentials-to-bridge ()
   (let ((t3-code--environments (make-hash-table :test #'equal))
