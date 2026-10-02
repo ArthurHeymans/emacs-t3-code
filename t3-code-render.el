@@ -655,6 +655,8 @@ Rows are ordered parent before child, so the last match is innermost."
         imenu-create-index-function #'t3-code-thread--imenu
         buffer-undo-list t)
   (add-to-invisibility-spec 't3-code-fold)
+  ;; Markup only carries these symbols when `t3-code-markdown-hide-markup'
+  ;; was on at fontification time, so the spec can stay unconditional.
   (dolist (markup t3-code-markdown-invisible-markup)
     (add-to-invisibility-spec markup))
   ;; Do not replace overlays owned by an active isearch. Its end hook applies

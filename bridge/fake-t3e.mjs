@@ -210,7 +210,13 @@ threadPayload.items.push({
 threadPayload.pendingRequestCount = 2;
 threadPayload.hasOlderHistory = true;
 threadPayload.queued = [
-  { runId: "run-doh-2", position: 1, held: false, text: "Afterwards, document the fallback." },
+  {
+    runId: "run-doh-2",
+    position: 1,
+    held: false,
+    text: "Afterwards, document the fallback.",
+    truncated: false,
+  },
 ];
 
 const olderItems = [

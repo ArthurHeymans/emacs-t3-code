@@ -194,10 +194,11 @@ INPUT-BUFFER may be nil.  Handlers should be idempotent.")
 (defun t3-code-thread--effort (selection)
   "Return the reasoning effort value in model SELECTION, or nil."
   (when-let* ((option (seq-find (lambda (option)
-                                  (string-match-p t3-code-thread--effort-regexp
-                                                  (format "%s" (plist-get option :id))))
+                                  (and (stringp (plist-get option :value))
+                                       (string-match-p t3-code-thread--effort-regexp
+                                                       (format "%s" (plist-get option :id)))))
                                 (append (plist-get selection :options) nil))))
-    (format "%s" (plist-get option :value))))
+    (plist-get option :value)))
 
 (defun t3-code-thread--indicator ()
   "Return the global activity indicator for this buffer's environment."
@@ -362,20 +363,20 @@ ENVIRONMENT hosts the new thread; TICK is the draft revision that was sent."
                           (with-current-buffer composer
                             (t3-code-compose--sent text tick)
                             t3-code-compose--history))))
-        ;; The draft became the first message; drop it unless edited since.
-        (when (and (buffer-live-p composer) (= 0 (buffer-size composer)))
-          (let ((windows (get-buffer-window-list composer nil t)))
-            (kill-buffer composer)
-            (dolist (window windows)
-              (when (and (window-live-p window) (not (one-window-p nil window)))
-                (delete-window window)))))
+        ;; Open the thread from the launch input's window, so the new chat
+        ;; and input take over the windows of the chat/input pair.
+        (when-let* ((window (and (buffer-live-p composer) (get-buffer-window composer))))
+          (select-window window))
         (let ((chat (t3-code-thread-open environment
                                          (list :id (plist-get result :threadId)
                                                :title (t3-code-thread--preview text 60)))))
           (with-current-buffer chat
             (when (buffer-live-p t3-code-thread--composer)
               (with-current-buffer t3-code-thread--composer
-                (setq t3-code-compose--history history)))))))))
+                (setq t3-code-compose--history history)))))
+        ;; The draft became the first message; drop it unless edited since.
+        (when (and (buffer-live-p composer) (= 0 (buffer-size composer)))
+          (kill-buffer composer))))))
 
 (defun t3-code-thread--wire-selection (selection)
   "Return model SELECTION ready for JSON, with its options as an array.
@@ -489,9 +490,26 @@ Keep the input buffer and preserve edits made while acceptance is pending."
     (t3-code-compose--in-chat (t3-code-thread-select-model))))
 
 (defun t3-code-compose-cycle-effort ()
-  "Cycle the reasoning effort of the next turn."
+  "Cycle the reasoning effort of the next turn, or of the thread to create."
   (interactive)
-  (t3-code-compose--in-chat (t3-code-thread-cycle-effort)))
+  (if (not t3-code-compose--launch)
+      (t3-code-compose--in-chat (t3-code-thread-cycle-effort))
+    (let ((buffer (current-buffer)))
+      (t3-code-thread--with-catalog
+       t3-code-compose--environment
+       (lambda (catalog)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (setq t3-code-compose--launch
+                   (plist-put t3-code-compose--launch :modelSelection
+                              (t3-code-thread--next-effort
+                               catalog (plist-get t3-code-compose--launch :modelSelection))))
+             (force-mode-line-update))))))))
+
+(defun t3-code-compose-manage-queue ()
+  "Manage this thread's queued messages, as in pi."
+  (interactive)
+  (t3-code-compose--in-chat (t3-code-thread-manage-queue)))
 
 (defun t3-code-compose-actions ()
   "Open the thread menu from the input buffer.
@@ -609,10 +627,11 @@ The menu acts on the chat, so its window is selected first."
                 (if (eq action 'metadata)
                     '(metadata (category . t3-code-file))
                   (funcall table string predicate action))))))
-     ((string-match-p "\\`\\(?:\\.\\.?/\\|~/\\|/.\\)" token)
-      (let ((default-directory (or (and context (nth 2 context)
-                                        (file-directory-p (nth 2 context))
-                                        (file-name-as-directory (nth 2 context)))
+     ;; Paths come from the user's draft, but a remote file name would still
+     ;; open a TRAMP connection just for completion.
+     ((and (string-match-p "\\`\\(?:\\.\\.?/\\|~/\\|/.\\)" token)
+           (not (file-remote-p token)))
+      (let ((default-directory (or (t3-code-thread--local-directory (and context (nth 2 context)))
                                    default-directory)))
         (list start end #'completion-file-name-table))))))
 
@@ -650,6 +669,9 @@ The menu acts on the chat, so its window is selected first."
                                      (plist-get (plist-get launch :modelSelection) :model))
                              'face 't3-code-model-face
                              'mouse-face 'highlight 'local-map t3-code-compose--model-map)
+                 (when-let* ((effort (t3-code-thread--effort (plist-get launch :modelSelection))))
+                   (propertize effort 'mouse-face 'highlight
+                               'local-map t3-code-compose--effort-map))
                  (if t3-code-compose--sending "starting…" "C-c C-c start")))
      " · ")))
 
@@ -658,7 +680,8 @@ The menu acts on the chat, so its window is selected first."
   (if t3-code-compose--launch
       (t3-code-compose--launch-header)
     (let ((origin t3-code-compose--origin-buffer)
-          (sending t3-code-compose--sending))
+          (sending t3-code-compose--sending)
+          (preselected t3-code-compose--dispatch-mode))
       (if (not (buffer-live-p origin))
           " T3 · thread closed (draft retained)"
         (with-current-buffer origin
@@ -694,6 +717,8 @@ The menu acts on the chat, so its window is selected first."
                     (when (equal (t3-code-thread--current-interaction-mode) "plan") "plan")
                     (when (> queued 0) (format "%d queued" queued))
                     (when sending "sending")
+                    (when preselected
+                      (propertize (format "C-c C-c will %s" preselected) 'face 'warning))
                     (t3-code-thread--indicator)))
              " · ")))))))
 
@@ -704,7 +729,7 @@ The menu acts on the chat, so its window is selected first."
   "TAB" #'t3-code-compose-complete
   "C-c C-c" #'t3-code-compose-send
   "C-c C-s" #'t3-code-compose-steer
-  "C-c C-q" #'t3-code-compose-queue
+  "C-c C-q" #'t3-code-compose-manage-queue
   "C-c C-k" #'t3-code-compose-abort
   "C-c C-p" #'t3-code-compose-actions
   "C-c C-m" #'t3-code-compose-select-model
@@ -732,11 +757,24 @@ The menu acts on the chat, so its window is selected first."
               (list #'t3-code-compose-completion-at-point t))
   (visual-line-mode 1))
 
+(defun t3-code-compose--input-window-p (window)
+  "Whether WINDOW shows a T3 input buffer."
+  (and (window-live-p window)
+       (with-current-buffer (window-buffer window) (derived-mode-p 't3-code-compose-mode))))
+
 (defun t3-code-compose--display (buffer)
-  "Display input BUFFER below the selected window and select it."
-  (pop-to-buffer buffer
-                 `((display-buffer-reuse-window display-buffer-below-selected)
-                   (window-height . ,t3-code-input-window-height))))
+  "Display input BUFFER below the selected chat window and select it.
+An input window already there, or selected, is reused rather than split."
+  (let ((window (or (get-buffer-window buffer)
+                    (and (t3-code-compose--input-window-p (selected-window))
+                         (selected-window))
+                    (and (t3-code-compose--input-window-p (window-in-direction 'below))
+                         (window-in-direction 'below)))))
+    (if window
+        (progn (set-window-buffer window buffer) (select-window window))
+      (pop-to-buffer buffer
+                     `((display-buffer-reuse-window display-buffer-below-selected)
+                       (window-height . ,t3-code-input-window-height))))))
 
 (defun t3-code-thread-compose (&optional dispatch-mode)
   "Focus this thread's input, preselecting DISPATCH-MODE for the next send."
@@ -795,7 +833,7 @@ The menu acts on the chat, so its window is selected first."
             t3-code-compose--launch launch
             t3-code-compose--origin-buffer nil
             t3-code-compose--thread-id nil))
-    (pop-to-buffer buffer)
+    (t3-code-compose--display buffer)
     buffer))
 
 (defun t3-code-compose--select-launch-model ()
@@ -879,7 +917,10 @@ The menu acts on the chat, so its window is selected first."
     (t3-code-thread-respond-approval "cancel")))
 
 (defun t3-code-thread--read-answer (question)
-  "Ask QUESTION in the minibuffer and return its answer value."
+  "Ask QUESTION in the minibuffer and return its answer value.
+Multi-select questions collect one choice per prompt, so option labels and
+custom answers may contain commas.  Empty answers are refused, as the
+server treats them as unanswered."
   (let* ((options (plist-get question :options))
          (labels (mapcar (lambda (option) (plist-get option :label)) options))
          (custom (not (eq (plist-get question :allowCustomAnswer) :false)))
@@ -897,12 +938,26 @@ The menu acts on the chat, so its window is selected first."
                   (when-let* ((option (seq-find (lambda (option)
                                                   (equal (plist-get option :label) choice))
                                                 options)))
-                    (concat "  " (plist-get option :description)))))))
-    (cond
-     ((null options) (read-string prompt))
-     ((eq (plist-get question :multiSelect) t)
-      (vconcat (mapcar value (completing-read-multiple prompt labels nil (not custom)))))
-     (t (funcall value (completing-read prompt labels nil (not custom)))))))
+                    (concat "  " (plist-get option :description))))))
+         (read-one (lambda (prompt choices)
+                     (if options
+                         (completing-read prompt choices nil (not custom))
+                       (read-string prompt)))))
+    (if (eq (plist-get question :multiSelect) t)
+        (let (chosen choice)
+          (while (not (string-empty-p
+                       (setq choice (funcall read-one
+                                             (if chosen
+                                                 (format "%s[%s] another (empty to finish): "
+                                                         prompt (string-join (reverse chosen) ", "))
+                                               prompt)
+                                             (seq-difference labels chosen)))))
+            (push choice chosen))
+          (unless chosen (user-error "Choose at least one answer"))
+          (vconcat (mapcar value (nreverse chosen))))
+      (let ((choice (funcall read-one prompt labels)))
+        (when (string-empty-p (string-trim choice)) (user-error "An answer is required"))
+        (funcall value choice)))))
 
 (defun t3-code-thread-answer-input ()
   "Answer the pending user-input request at point or the latest one."
@@ -961,7 +1016,8 @@ The menu acts on the chat, so its window is selected first."
                                (format "%s: " label) '("default" "yes" "no") nil t nil nil
                                (if saved (if (eq value t) "yes" "no") "default"))))
                   (unless (equal answer "default")
-                    (list :id id :value (equal answer "yes")))))
+                    ;; nil would serialize as JSON null, which is not a boolean.
+                    (list :id id :value (if (equal answer "yes") t :false)))))
                ("select"
                 (let* ((choices (plist-get descriptor :choices))
                        (default (or (and (stringp value) value)
@@ -1051,7 +1107,8 @@ The menu acts on the chat, so its window is selected first."
                       (when same-model (plist-get current :options))))
            (selection (append (list :instanceId instance :model slug)
                               (when options (list :options (vconcat options))))))
-      (unless (equal selection current)
+      (unless (equal (t3-code-thread--wire-selection selection)
+                     (t3-code-thread--wire-selection current))
         (t3-code-thread--set-model-selection selection)))))
 
 (defun t3-code-thread--model-selection-supported-p ()
@@ -1290,7 +1347,10 @@ stable point."
                                             queued)
                               '((?r "resume queue")))))))
       (pcase (car action)
-        (?e (let ((text (read-string-from-buffer "Edit queued message" (plist-get entry :text))))
+        (?e (when (eq (plist-get entry :truncated) t)
+              ;; Saving would replace the full message with this preview.
+              (user-error "This queued message is too long to edit here; cancel and resend it"))
+            (let ((text (read-string-from-buffer "Edit queued message" (plist-get entry :text))))
               (t3-code-thread--command (list :type "queued-run.edit" :runId run-id :text text)
                                        "T3 queued message edited")))
         (?c (t3-code-thread--command (list :type "queued-run.cancel" :runId run-id)
@@ -1357,13 +1417,22 @@ stable point."
             (and (match-string 3 text) (string-to-number (match-string 3 text)))))
      (t (list text nil nil)))))
 
+(defun t3-code-thread--local-directory (directory)
+  "Return DIRECTORY as a directory name when it is local and exists."
+  (and (stringp directory) (not (file-remote-p directory))
+       (file-directory-p directory)
+       (file-name-as-directory directory)))
+
 (defun t3-code-thread--resolve-file (candidate root)
-  "Resolve CANDIDATE against ROOT; return (FILE LINE COLUMN) when it exists."
+  "Resolve CANDIDATE against ROOT; return (FILE LINE COLUMN) when it exists.
+Remote names are ignored: agent text must not open TRAMP connections."
   (pcase-let ((`(,path ,line ,column) (t3-code-thread--parse-location candidate)))
-    (unless (or (string-empty-p path) (string-match-p "\\`[a-z]+://" path))
-      (let ((file (expand-file-name path (if (and root (file-directory-p root))
-                                             root default-directory))))
-        (when (file-exists-p file) (list file line column))))))
+    (unless (or (string-empty-p path) (string-match-p "\\`[a-z]+://" path)
+                (file-remote-p path))
+      (let ((file (expand-file-name path (or (t3-code-thread--local-directory root)
+                                             default-directory))))
+        (when (and (not (file-remote-p file)) (file-exists-p file))
+          (list file line column))))))
 
 (defun t3-code-thread--markdown-link-at-point ()
   "Return the target of a Markdown link around point, or nil."
@@ -1450,9 +1519,8 @@ trailing `&' runs the command asynchronously."
          (command (t3-code-thread--substitute-file
                    (string-trim-right (replace-regexp-in-string "[ \t]&[ \t]*\\'" "" command))
                    file))
-         (default-directory (or (let ((root (t3-code-thread--worktree-path)))
-                                  (and root (file-directory-p root)
-                                       (file-name-as-directory root)))
+         (default-directory (or (t3-code-thread--local-directory
+                                 (t3-code-thread--worktree-path))
                                 default-directory)))
     (if async (async-shell-command command) (shell-command command))))
 
@@ -1625,6 +1693,20 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (add-hook 't3-code-thread-refresh-hook #'t3-code-thread--update-phase nil t)
   (add-hook 'kill-buffer-hook #'t3-code-thread--cleanup nil t))
 
+(defun t3-code-thread--retain-displaced (old new)
+  "Keep items of live window OLD that are missing from NEW as loaded history.
+Once older pages are loaded, items sliding out of the live window would
+otherwise fall between those pages and the window, where paging backwards
+cannot reach them."
+  (when t3-code-thread--older-items
+    (let ((known (make-hash-table :test #'equal)))
+      (dolist (item (append new t3-code-thread--older-items))
+        (puthash (plist-get item :id) t known))
+      (setq t3-code-thread--older-items
+            (append t3-code-thread--older-items
+                    (seq-remove (lambda (item) (gethash (plist-get item :id) known))
+                                old))))))
+
 (defun t3-code-thread--receive (message)
   "Apply a thread subscription MESSAGE without discarding the last good view.
 A retrying bridge may emit an error snapshot between successful snapshots;
@@ -1638,6 +1720,8 @@ only synchronization proves that its stream has recovered."
       (unless (plist-get t3-code-thread--payload :thread)
         (setq t3-code-thread--payload payload)))
      ((member kind '("snapshot" "event"))
+      (t3-code-thread--retain-displaced (plist-get t3-code-thread--payload :items)
+                                        (plist-get payload :items))
       (setq t3-code-thread--payload payload))
      ((equal kind "synchronized")
       (setq t3-code-thread--stream-error nil)))
@@ -1650,8 +1734,20 @@ only synchronization proves that its stream has recovered."
   "Chats replace the selected window, like visiting a file.
 `display-buffer-alist' entries still take precedence.")
 
+(defun t3-code-thread--select-chat-window ()
+  "From a T3 input window, select the chat window above it.
+A new chat then replaces the old chat, and its input the old input,
+instead of the chat landing in the small input window."
+  ;; Check the window, not the current buffer: callbacks run elsewhere.
+  (when (t3-code-compose--input-window-p (selected-window))
+    (when-let* ((above (window-in-direction 'above))
+                ((with-current-buffer (window-buffer above)
+                   (derived-mode-p 't3-code-thread-mode))))
+      (select-window above))))
+
 (defun t3-code-thread-show (chat &optional focus-input)
   "Display CHAT with its input window; select the input when FOCUS-INPUT."
+  (t3-code-thread--select-chat-window)
   (pop-to-buffer chat t3-code-thread--display-action)
   (with-current-buffer chat
     (when (or focus-input (not (eq t3-code-input-window-display 'hidden)))
@@ -1679,10 +1775,12 @@ only synchronization proves that its stream has recovered."
                    (with-current-buffer buffer
                      (t3-code-thread--receive message)))))))
       (t3-code-thread--refresh))
+    (t3-code-thread--select-chat-window)
     (pop-to-buffer buffer t3-code-thread--display-action)
     (with-current-buffer buffer
       (when fresh (t3-code-thread-jump-to-latest))
-      (t3-code-shell-mark-visited environment thread-id)
+      ;; Opening always records a visit: unread tracking needs a watermark.
+      (t3-code-shell-mark-visited environment thread-id t)
       (unless (eq t3-code-input-window-display 'hidden)
         (t3-code-thread-compose)))
     buffer))

@@ -91,16 +91,20 @@ the input after each send, or =hidden= to open it only when composing.
 
 Each turn starts with a =You= heading followed by the =Assistant= section.
 Answers and plans render as Markdown (=gfm-mode= from markdown-mode when
-installed, otherwise =markdown-ts-mode=) with markup hidden; file changes
-render as diffs.  Tool calls appear inline as =$ command=, =edit path=,
+installed, otherwise =markdown-ts-mode=) with markup hidden (see
+=t3-code-markdown-hide-markup=); file changes render as diffs.  Code blocks
+are highlighted only with major modes Emacs already associates with file
+names, and without running their mode hooks, so agent output cannot enable
+arbitrary modes.  Tool calls appear inline as =$ command=, =edit path=,
 =search …=; their output is collapsed to =t3-code-tool-preview-lines= lines.
 Reasoning is shown expanded (see =t3-code-thinking-display=).
 
 =RET= visits the file reference at point (=path:12:3=, =path#L12=, Markdown
 links, the path of an =edit= block) in another window, or browses a URL;
-=C-u RET= inverts the window choice.  On a pending question, =RET= answers it
-in the minibuffer; on an attention entry it reveals the request; elsewhere it
-toggles the block.  =!= runs a shell command on the file at point: an
+=C-u RET= inverts the window choice; remote (TRAMP) names are never
+followed.  On a pending question, =RET= answers it in the minibuffer, one
+choice per prompt for multi-select questions (an empty answer finishes); on
+an attention entry it reveals the request; elsewhere it toggles the block.  =!= runs a shell command on the file at point: an
 isolated =*= marks where the file goes, otherwise it is appended, and a
 trailing =&= runs asynchronously.
 
@@ -121,7 +125,8 @@ resumes, =s= toggles settled threads and =g= refreshes (=C-u g= restarts the
 bridge).
 
 =C-c C-j= switches to any active thread with completion, grouped by project.
-=C-c C-r= resumes a settled or archived thread of the current project and
+=C-c C-r= resumes a settled or archived thread of the current project
+(archived threads are restored first) and
 =M-x t3-code-search-threads= searches titles and messages.
 
 =C-c C-n= starts a thread: it asks where to work (project root, a new
@@ -142,7 +147,7 @@ notifications.  Opening a thread marks it seen.
 |--------------------+---------+----------------------------------------------|
 | =C-c C-c=          | input   | Send, or queue while the thread is working   |
 | =C-c C-s=          | input   | Steer the running turn                       |
-| =C-c C-q=          | input   | Queue explicitly                             |
+| =C-c C-q=          | input   | Manage queued messages                       |
 | =C-c C-k=          | both    | Abort the running turn                       |
 | =C-c C-p=          | input   | Thread menu (=?= or =.= in the chat)         |
 | =C-c C-m=          | both    | Select provider, model and options           |
@@ -168,10 +173,13 @@ notifications.  Opening a thread marks it seen.
 | =q=                | chat    | Hide the chat and input windows              |
 
 The thread menu also offers approvals (=y=, =Y=, =x=, =X=), answering or
-dismissing questions (=a=, =A=), queued messages (=Q=: edit, cancel, steer
-now, reorder, resume), runtime and plan modes, rename (=C-u N= regenerates
-the title), pin, settle, snooze, archive and delete, the worktree in Dired,
-VC status, and copying IDs.
+dismissing questions (=a=, =A=), queued messages (=Q=, also =C-c C-q= in the
+input: edit, cancel, steer now, reorder, resume), explicitly queued sends
+(=q=), runtime and plan modes, rename (=C-u N= regenerates the title), pin,
+settle, snooze, archive and delete, the worktree in Dired, VC status, and
+copying IDs.  A send mode chosen from the menu (steer, restart) is shown in
+the input header until the next send.  Queued messages too long for the
+bridge to send in full cannot be edited, only cancelled and resent.
 
 ** Hooks
 

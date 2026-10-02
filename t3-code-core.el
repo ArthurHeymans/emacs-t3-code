@@ -458,6 +458,8 @@ CREDENTIAL, when non-nil, is (TYPE . TOKEN), where TYPE is `pairing' or
             (when-let* ((stderr-process (get-buffer-process stderr-buffer)))
               (set-process-query-on-exit-flag stderr-process nil)
               (set-process-filter stderr-process #'t3-code--stderr-filter))
+            ;; Catalogs and provider commands may differ after a restart.
+            (clrhash (t3-code-environment-cache environment))
             (setf (t3-code-environment-process environment) process
                   (t3-code-environment-generation environment)
                   (1+ (t3-code-environment-generation environment))

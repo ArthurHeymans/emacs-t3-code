@@ -406,10 +406,11 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
                                :options ((:label "Tests" :description "" :value "tests")
                                          (:label "Docs" :description "" :value "docs"))))))))
     (should (string-match-p "RET to answer" (buffer-string)))
-    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "DoH"))
-              ((symbol-function 'completing-read-multiple) (lambda (&rest _) '("Tests" "custom"))))
+    ;; Multi-select collects one choice per prompt; commas stay intact.
+    (let ((replies (list "DoH" "Tests" "custom, with comma" "")))
+     (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop replies))))
       (t3-code-thread--goto-item "ask")
-      (t3-code-thread-ret))
+      (t3-code-thread-ret)))
     (pcase-let ((`(,operation ,input) (car requests)))
       (should (equal operation "thread.command"))
       (let* ((command (plist-get input :command))
@@ -417,7 +418,7 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
         (should (equal (plist-get command :type) "runtime-request.respond"))
         (should (equal (plist-get command :requestId) "input-1"))
         (should (equal (gethash "q1" answers) "doh "))
-        (should (equal (gethash "q2" answers) ["tests" "custom"]))
+        (should (equal (gethash "q2" answers) ["tests" "custom, with comma"]))
         (should (string-match-p "\"q1\":\"doh \"" (json-serialize input)))))))
 
 (ert-deftest t3-code-test-thread-cycles-reasoning-effort ()
@@ -555,6 +556,97 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
             (should (equal (plist-get opened :id) "thread-new"))
             (should-not (buffer-live-p input)))
         (when (buffer-live-p input) (kill-buffer input))))))
+
+(ert-deftest t3-code-test-thread-keeps-items-displaced-after-loading-history ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--payload
+          '(:thread (:id "t") :items ((:id "edge" :type "assistant_message" :text "Edge")
+                                      (:id "new" :type "assistant_message" :text "New")))
+          t3-code-thread--older-items
+          '((:id "old" :type "assistant_message" :text "Old")))
+    (t3-code-thread--receive
+     '(:kind "event" :payload (:thread (:id "t")
+                               :items ((:id "new" :type "assistant_message" :text "New")
+                                       (:id "newer" :type "assistant_message" :text "Newer")))))
+    (should (equal (mapcar (lambda (item) (plist-get item :id)) (t3-code-thread--items))
+                   '("old" "edge" "new" "newer")))))
+
+(ert-deftest t3-code-test-thread-refuses-to-edit-truncated-queued-message ()
+  (t3-code-test--with-chat
+      '(:thread (:id "thread-1")
+        :queued ((:runId "run-2" :position 1 :held :false :text "preview" :truncated t)))
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "1. preview"))
+              ((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?e "edit"))))
+      (should-error (t3-code-thread-manage-queue) :type 'user-error))
+    (should-not requests)))
+
+(ert-deftest t3-code-test-thread-model-options-send-real-booleans ()
+  (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "no")))
+    (let ((options (t3-code-thread--model-options
+                    '((:id "fast" :label "Fast" :type "boolean")) nil)))
+      (should (equal options '((:id "fast" :value :false))))
+      (should (string-match-p "\"value\":false"
+                              (json-serialize (car options) :false-object :false))))))
+
+(ert-deftest t3-code-test-thread-effort-ignores-boolean-options ()
+  (should-not (t3-code-thread--effort '(:options [(:id "thinking" :value t)])))
+  (should (equal (t3-code-thread--effort '(:options ((:id "thinking" :value :false)
+                                                     (:id "effort" :value "high"))))
+                 "high")))
+
+(ert-deftest t3-code-test-thread-ignores-remote-file-references ()
+  (let ((root (make-temp-file "t3-root" t)))
+    (unwind-protect
+        ;; A stand-in remote handler: name syntax is fine, any access fails.
+        (let ((file-name-handler-alist
+               (list (cons "\\`/[^/|:]+:"
+                           (lambda (operation &rest _)
+                             (if (eq operation 'file-remote-p) t
+                               (ert-fail (format "Touched a remote file: %s" operation))))))))
+          (should-not (t3-code-thread--resolve-file "/ssh:host:/etc/passwd" root))
+          (should-not (t3-code-thread--local-directory "/ssh:host:/tmp/")))
+      (delete-directory root t))))
+
+(ert-deftest t3-code-test-thread-switch-from-input-replaces-chat-and-input ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((environment (t3-code-environment-create :id "layout" :state 'ready))
+          (t3-code-input-window-display 'always)
+          buffers)
+      (cl-letf (((symbol-function 't3-code-subscribe) (lambda (&rest _) nil))
+                ((symbol-function 't3-code-shell-mark-visited) #'ignore))
+        (unwind-protect
+            (progn
+              (push (t3-code-thread-open environment '(:id "one")) buffers)
+              (should (with-current-buffer (window-buffer) (derived-mode-p 't3-code-compose-mode)))
+              (push (t3-code-thread-open environment '(:id "two")) buffers)
+              (should (= (length (window-list)) 2))
+              (should (equal (buffer-name (window-buffer (frame-first-window)))
+                             (t3-code-thread-buffer-name environment "two")))
+              (should (with-current-buffer (window-buffer) (derived-mode-p 't3-code-compose-mode)))
+              (should (> (window-height (frame-first-window)) (window-height))))
+          (dolist (buffer buffers)
+            (with-current-buffer buffer
+              (when (buffer-live-p t3-code-thread--composer)
+                (kill-buffer t3-code-thread--composer)))
+            (kill-buffer buffer)))))))
+
+(ert-deftest t3-code-test-markdown-code-fences-cannot-enable-arbitrary-modes ()
+  (should (t3-code-markdown--safe-mode-p 'emacs-lisp-mode))
+  (should-not (t3-code-markdown--safe-mode-p 'global-hl-line-mode))
+  (should-not (t3-code-markdown--safe-mode-p 'server-mode))
+  (skip-unless (require 'markdown-mode nil t))
+  (let ((t3-code-markdown-mode 'gfm-mode)
+        (t3-code-markdown--cache (make-hash-table :test #'equal))
+        (enabled nil)
+        (hook-ran nil))
+    (cl-letf (((symbol-function 't3-test-probe-mode) (lambda (&rest _) (setq enabled t)))
+              (emacs-lisp-mode-hook (list (lambda () (setq hook-ran t)))))
+      (t3-code-markdown-fontify "```t3-test-probe\nx\n```\n\n```emacs-lisp\n(car x)\n```\n"
+                                'markdown))
+    (should-not enabled)
+    (should-not hook-ran)))
 
 (provide 't3-code-thread-test)
 ;;; t3-code-thread-test.el ends here

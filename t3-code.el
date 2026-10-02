@@ -259,10 +259,20 @@ Outside a known project, offer settled threads of every project."
                                  :threads))))
          (entries (sort (append settled archived)
                         (lambda (a b) (string> (or (plist-get (cdr a) :updatedAt) "")
-                                               (or (plist-get (cdr b) :updatedAt) ""))))))
-    (t3-code-thread-open environment
-                         (t3-code--read-thread "Resume thread: "
-                                               (t3-code--thread-candidates environment entries)))))
+                                               (or (plist-get (cdr b) :updatedAt) "")))))
+         (thread (t3-code--read-thread "Resume thread: "
+                                       (t3-code--thread-candidates environment entries))))
+    (if (not (equal (plist-get thread :status) "archived"))
+        (t3-code-thread-open environment thread)
+      ;; Archived threads are outside the shell; restore before opening so
+      ;; lifecycle commands such as pin and settle apply again.
+      (t3-code-shell-dispatch
+       environment (list :type "thread.unarchive" :threadId (plist-get thread :id))
+       (lambda (_result error)
+         (if error
+             (message "T3 unarchive failed: %s" (or (plist-get error :message) error))
+           (t3-code-thread-open environment
+                                (plist-put (copy-sequence thread) :status "idle"))))))))
 
 (defun t3-code-search-threads (query)
   "Search thread titles and messages for QUERY and open a match."

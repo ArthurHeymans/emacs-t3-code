@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 
 (defcustom t3-code-markdown-mode 'auto
@@ -82,18 +84,41 @@ a specific mode; nil shows plain text."
             (invisible (get-text-property position 'invisible)))
         (when face
           (put-text-property (- position begin) (- next begin) 'face face result))
-        (when (memq invisible t3-code-markdown-invisible-markup)
+        (when (and t3-code-markdown-hide-markup
+                   (memq invisible t3-code-markdown-invisible-markup))
           (put-text-property (- position begin) (- next begin) 'invisible invisible result))
         (setq position next)))
     result))
 
+(defun t3-code-markdown--safe-mode-p (mode)
+  "Whether MODE is a major mode Emacs already uses for some file name.
+Code fences name their language, and markdown-mode calls `LANG-mode' to
+highlight them.  Transcript text comes from an agent, so a fence such as
+```server must not enable an arbitrary function."
+  (and mode (symbolp mode) (fboundp mode)
+       (seq-some (lambda (entry)
+                   (eq mode (if (consp (cdr entry)) (cadr entry) (cdr entry))))
+                 auto-mode-alist)))
+
+(declare-function markdown-get-lang-mode "markdown-mode" (lang))
+
 (defun t3-code-markdown--fontify-with (mode text)
   "Fontify TEXT using MODE and return the propertized copy."
   (with-current-buffer (t3-code-markdown--buffer mode)
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          (lang-mode (and (fboundp 'markdown-get-lang-mode)
+                          (symbol-function 'markdown-get-lang-mode))))
       (erase-buffer)
       (insert text)
-      (font-lock-ensure)
+      (cl-letf (((symbol-function 'markdown-get-lang-mode)
+                 (lambda (lang)
+                   (let ((candidate (and lang-mode (funcall lang-mode lang))))
+                     (and (t3-code-markdown--safe-mode-p candidate) candidate)))))
+        ;; Language modes fontify code blocks in buffers of their own; their
+        ;; hooks (LSP, linters, spell checkers) must not run there.  The
+        ;; variable is buffer-local, so set its default for those buffers.
+        (cl-letf (((default-value 'delay-mode-hooks) t))
+          (font-lock-ensure)))
       (t3-code-markdown--faces (point-min) (point-max)))))
 
 (defun t3-code-markdown-fontify (text kind)

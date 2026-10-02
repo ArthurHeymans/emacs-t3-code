@@ -68,5 +68,24 @@
     (should (equal (plist-get (plist-get (cadr (car requests)) :command) :type)
                    "thread.visit"))))
 
+(ert-deftest t3-code-test-shell-opening-records-first-visit-from-server-time ()
+  (let ((environment (t3-code-environment-create
+                      :id "shell" :state 'ready :capabilities '(:threadLifecycle t)))
+        requests)
+    (setf (t3-code-environment-shell environment)
+          (t3-code-test--shell '(("b" "idle" "/work/repo" :false))))
+    ;; A server clock ahead of ours must win, or the thread stays unread.
+    (plist-put (cdr (t3-code-shell-find-thread environment "b"))
+               :updatedAt "2999-01-01T00:00:00.000Z")
+    (cl-letf (((symbol-function 't3-code-request)
+               (lambda (_environment _operation input _callback)
+                 (push (plist-get input :command) requests))))
+      (t3-code-shell-mark-visited environment "b")
+      (should-not requests)
+      (t3-code-shell-mark-visited environment "b" t)
+      (t3-code-shell-mark-visited environment "b" t))
+    (should (= (length requests) 1))
+    (should (equal (plist-get (car requests) :visitedAt) "2999-01-01T00:00:00.000Z"))))
+
 (provide 't3-code-shell-test)
 ;;; t3-code-shell-test.el ends here

@@ -173,25 +173,44 @@ COMMAND gains a fresh :commandId.  CALLBACK receives (RESULT ERROR)."
                            (message "T3 %s failed: %s" (plist-get command :type)
                                     (or (plist-get error :message) error)))))))
 
-(defun t3-code-shell-mark-visited (environment thread-id)
-  "Record that THREAD-ID in ENVIRONMENT has been seen, when it is unread."
+(defun t3-code-shell--visited-key (thread-id)
+  "Return the environment cache key of THREAD-ID's last recorded visit."
+  (list "visited" thread-id))
+
+(defun t3-code-shell-mark-visited (environment thread-id &optional force)
+  "Record that THREAD-ID in ENVIRONMENT has been seen.
+Without FORCE only unread threads are marked.  The server compares the
+visit with run completion times, so the visit is the later of the shell's
+update time and now: a slow local clock cannot keep a thread unread.  At
+most one visit is sent per shell update of the thread."
   (when-let* ((entry (t3-code-shell-find-thread environment thread-id))
-              ((eq (plist-get (cdr entry) :unread) t))
+              (thread (cdr entry))
+              ((or force (eq (plist-get thread :unread) t)))
               ((t3-code-capability-p environment :threadLifecycle)))
-    ;; Clear locally so repeated refreshes do not resend before the shell updates.
-    (plist-put (cdr entry) :unread :false)
-    (t3-code-shell-dispatch
-     environment
-     (list :type "thread.visit" :threadId thread-id
-           :visitedAt (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t)))))
+    (let* ((cache (t3-code-environment-cache environment))
+           (key (t3-code-shell--visited-key thread-id))
+           (updated (plist-get thread :updatedAt))
+           (now (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t)))
+      (unless (and (gethash key cache) (equal (gethash key cache) updated))
+        (puthash key (or updated now) cache)
+        (plist-put thread :unread :false)
+        (t3-code-shell-dispatch
+         environment
+         (list :type "thread.visit" :threadId thread-id
+               :visitedAt (if (and updated (string> updated now)) updated now)))))))
 
 (defun t3-code-shell--visit-visible (environment _old new)
-  "Mark ENVIRONMENT threads visible in a window as seen after shell update NEW."
-  (dolist (project (plist-get new :projects))
-    (dolist (thread (plist-get project :threads))
-      (when (and (eq (plist-get thread :unread) t)
-                 (t3-code-shell--visible-p environment (plist-get thread :id)))
-        (t3-code-shell-mark-visited environment (plist-get thread :id))))))
+  "Mark ENVIRONMENT threads visible in a window as seen after shell update NEW.
+A visible thread without any recorded visit, such as one just created, gets
+its first one here."
+  (let ((cache (t3-code-environment-cache environment)))
+    (dolist (project (plist-get new :projects))
+      (dolist (thread (plist-get project :threads))
+        (let ((id (plist-get thread :id)))
+          (when (and (or (eq (plist-get thread :unread) t)
+                         (not (gethash (t3-code-shell--visited-key id) cache)))
+                     (t3-code-shell--visible-p environment id))
+            (t3-code-shell-mark-visited environment id t)))))))
 
 (add-hook 't3-code-shell-update-functions #'t3-code-shell--visit-visible)
 
