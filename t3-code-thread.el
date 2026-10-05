@@ -638,9 +638,8 @@ The menu acts on the chat, so its window is selected first."
      ;; open a TRAMP connection just for completion.
      ((and (string-match-p "\\`\\(?:\\.\\.?/\\|~/\\|/.\\)" token)
            (not (file-remote-p token)))
-      (let ((default-directory (or (t3-code-thread--local-directory (and context (nth 2 context)))
-                                   default-directory)))
-        (list start end #'completion-file-name-table))))))
+      ;; Relative to the input's `default-directory', the thread worktree.
+      (list start end #'completion-file-name-table)))))
 
 (add-to-list 'completion-category-defaults '(t3-code-file (styles substring basic)))
 
@@ -836,6 +835,7 @@ An input window already there, or selected, is reused rather than split."
             t3-code-compose--dispatch-mode
             (unless (equal dispatch-mode "auto") dispatch-mode)
             t3-code-compose--origin-buffer origin))
+    (with-current-buffer origin (t3-code-thread--follow-directory))
     (t3-code-compose--display buffer)
     buffer))
 
@@ -874,7 +874,11 @@ An input window already there, or selected, is reused rather than split."
       (setq t3-code-compose--environment environment
             t3-code-compose--launch launch
             t3-code-compose--origin-buffer nil
-            t3-code-compose--thread-id nil))
+            t3-code-compose--thread-id nil)
+      (when-let* ((path (plist-get launch :directory))
+                  (directory (t3-code-thread--directory environment path)))
+        (setq default-directory directory
+              list-buffers-directory directory)))
     (t3-code-compose--display buffer)
     buffer))
 
@@ -1491,21 +1495,36 @@ stable point."
             (and (match-string 3 text) (string-to-number (match-string 3 text)))))
      (t (list text nil nil)))))
 
-(defun t3-code-thread--local-directory (directory)
-  "Return DIRECTORY as a directory name when it is local and exists."
-  (and (stringp directory) (not (file-remote-p directory))
-       (file-directory-p directory)
-       (file-name-as-directory directory)))
+(defun t3-code-thread--directory (&optional environment path)
+  "Return worktree PATH of ENVIRONMENT as an Emacs directory name, or nil.
+PATH and ENVIRONMENT default to this thread's.  A local directory must
+exist; a remote one is not checked, which would open a TRAMP connection."
+  (when-let* ((environment (or environment t3-code-thread--environment))
+              (directory (t3-code-local-file environment
+                                             (or path (t3-code-thread--worktree-path))))
+              ((or (file-remote-p directory) (file-directory-p directory))))
+    (file-name-as-directory directory)))
 
-(defun t3-code-thread--resolve-file (candidate root)
-  "Resolve CANDIDATE against ROOT; return (FILE LINE COLUMN) when it exists.
-Remote names are ignored: agent text must not open TRAMP connections."
+(defun t3-code-thread--follow-directory ()
+  "Make the chat and its input visit the thread worktree, like a shell's cwd."
+  (when-let* ((directory (t3-code-thread--directory)))
+    (dolist (buffer (list (current-buffer) t3-code-thread--composer))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq default-directory directory
+                list-buffers-directory directory))))))
+
+(defun t3-code-thread--resolve-file (candidate root &optional prefix)
+  "Resolve CANDIDATE against server path ROOT; return (FILE LINE COLUMN).
+PREFIX is the TRAMP prefix of the server's files, nil when local.  Names
+in agent text that are already remote are ignored: agent text must not
+pick which host a TRAMP connection goes to."
   (pcase-let ((`(,path ,line ,column) (t3-code-thread--parse-location candidate)))
     (unless (or (string-empty-p path) (string-match-p "\\`[a-z]+://" path)
-                (file-remote-p path))
-      (let ((file (expand-file-name path (or (t3-code-thread--local-directory root)
-                                             default-directory))))
-        (when (and (not (file-remote-p file)) (file-exists-p file))
+                (file-remote-p path) (null root))
+      (let ((file (concat prefix (expand-file-name path (file-name-as-directory root)))))
+        (when (and (equal (file-remote-p file) (and prefix (file-remote-p prefix)))
+                   (file-exists-p file))
           (list file line column))))))
 
 (defun t3-code-thread--markdown-link-at-point ()
@@ -1523,8 +1542,11 @@ Remote names are ignored: agent text must not open TRAMP connections."
   "Return (FILE LINE COLUMN) for the file reference at point, or nil."
   (let* ((item (t3-code-thread--item-by-id (t3-code-thread--item-at-point)))
          (row (t3-code-thread--row-at-point))
-         (root (t3-code-thread--worktree-path)))
-    (seq-some (lambda (candidate) (and candidate (t3-code-thread--resolve-file candidate root)))
+         (root (or (t3-code-thread--worktree-path)
+                   (t3-code-server-path t3-code-thread--environment default-directory)))
+         (prefix (t3-code-file-prefix t3-code-thread--environment)))
+    (seq-some (lambda (candidate)
+                (and candidate (t3-code-thread--resolve-file candidate root prefix)))
               (list (and (plist-get row :header) (plist-get item :path))
                     (t3-code-thread--markdown-link-at-point)
                     ;; Bare words such as "test" are prose, not references.
@@ -1592,26 +1614,24 @@ trailing `&' runs the command asynchronously."
          (async (string-match-p "[ \t]&[ \t]*\\'" command))
          (command (t3-code-thread--substitute-file
                    (string-trim-right (replace-regexp-in-string "[ \t]&[ \t]*\\'" "" command))
-                   file))
-         (default-directory (or (t3-code-thread--local-directory
-                                 (t3-code-thread--worktree-path))
-                                default-directory)))
+                   ;; A remote command runs on the file's host.
+                   (file-local-name file)))
+         (default-directory (or (t3-code-thread--directory) default-directory)))
     (if async (async-shell-command command) (shell-command command))))
 
 (defun t3-code-thread-open-worktree ()
   "Open the thread worktree in Dired."
   (interactive)
-  (let ((path (t3-code-thread--worktree-path)))
-    (unless (and (stringp path) (file-directory-p path))
-      (user-error "Thread worktree is not locally accessible: %s" path))
-    (dired path)))
+  (dired (or (t3-code-thread--directory)
+             (user-error "Thread worktree is not accessible: %s"
+                         (t3-code-thread--worktree-path)))))
 
 (defun t3-code-thread-open-status ()
   "Open a version-control status/diff view for the worktree."
   (interactive)
-  (let ((path (t3-code-thread--worktree-path)))
-    (unless (and (stringp path) (file-directory-p path))
-      (user-error "Thread worktree is not locally accessible: %s" path))
+  (let ((path (or (t3-code-thread--directory)
+                  (user-error "Thread worktree is not accessible: %s"
+                              (t3-code-thread--worktree-path)))))
     (if (fboundp 'magit-status)
         (magit-status path)
       (vc-dir path))))
@@ -1806,6 +1826,7 @@ only synchronization proves that its stream has recovered."
       (setq t3-code-thread--stream-error nil)))
     (when (or (not (equal t3-code-thread--payload t3-code-thread--rendered-payload))
               (not (equal t3-code-thread--stream-error t3-code-thread--rendered-error)))
+      (t3-code-thread--follow-directory)
       (t3-code-thread--refresh))))
 
 (defvar t3-code-thread--display-action
@@ -1845,6 +1866,7 @@ instead of the chat landing in the small input window."
       (setq t3-code-thread--environment environment
             t3-code-thread--thread-id thread-id
             t3-code-thread--summary thread)
+      (t3-code-thread--follow-directory)
       (unless t3-code-thread--subscription
         (setq t3-code-thread--subscription
               (t3-code-subscribe

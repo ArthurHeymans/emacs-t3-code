@@ -616,8 +616,38 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
                              (if (eq operation 'file-remote-p) t
                                (ert-fail (format "Touched a remote file: %s" operation))))))))
           (should-not (t3-code-thread--resolve-file "/ssh:host:/etc/passwd" root))
-          (should-not (t3-code-thread--local-directory "/ssh:host:/tmp/")))
+          ;; Nor against a remote server, whose prefix the agent cannot change.
+          (should-not (t3-code-thread--resolve-file "/ssh:other:/etc/passwd" "/srv/"
+                                                    "/ssh:host:")))
       (delete-directory root t))))
+
+(ert-deftest t3-code-test-thread-follows-remote-worktree ()
+  (let ((file-name-handler-alist
+         ;; A stand-in remote handler where every remote file exists.
+         (list (cons "\\`/ssh:host:"
+                     (lambda (operation &rest args)
+                       (pcase operation
+                         ('file-remote-p (and (string-match "\\`/ssh:host:" (car args))
+                                              (pcase (cadr args)
+                                                ('host "host") ('localname (substring (car args) 10))
+                                                (_ "/ssh:host:"))))
+                         ('file-exists-p t)
+                         ((or 'expand-file-name 'file-name-as-directory
+                              'file-name-directory 'file-name-nondirectory)
+                          (let ((file-name-handler-alist nil)) (apply operation args)))
+                         (_ (ert-fail (format "Touched a remote file: %s" operation))))))))
+        (environment (t3-code-environment-create :id "remote"
+                                                 :endpoint "https://host:3773")))
+    (with-temp-buffer
+      (t3-code-thread-mode)
+      (setq t3-code-thread--environment environment
+            t3-code-thread--payload '(:thread (:worktreePath "/srv/app")))
+      (setf (t3-code-environment-remote-prefix environment) "/ssh:host:")
+      (t3-code-thread--follow-directory)
+      (should (equal default-directory "/ssh:host:/srv/app/"))
+      (should (equal (t3-code-thread--resolve-file "src/a.el:3" "/srv/app" "/ssh:host:")
+                     '("/ssh:host:/srv/app/src/a.el" 3 nil))))))
+
 
 (ert-deftest t3-code-test-thread-switch-from-input-replaces-chat-and-input ()
   (save-window-excursion

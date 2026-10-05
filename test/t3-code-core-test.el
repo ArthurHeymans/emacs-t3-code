@@ -233,5 +233,27 @@
       (should (equal (length sent) 4))
       (should-not timers))))
 
+(ert-deftest t3-code-test-core-maps-server-paths-to-emacs-files ()
+  (let ((local (t3-code-environment-create :endpoint "http://127.0.0.1:3773"))
+        (remote (t3-code-environment-create :endpoint "https://devbox.example.com:3773"))
+        (forwarded (t3-code-environment-create :endpoint "http://localhost:4000"))
+        (t3-code-file-prefixes '(("http://localhost:4000" . "/ssh:devbox:")))
+        (t3-code-tramp-default-method "sshx"))
+    (should-not (t3-code-file-prefix local))
+    (should (equal (t3-code-local-file local "/src/app") "/src/app"))
+    (should (equal (t3-code-server-path local "/src/app/") "/src/app/"))
+    (should-not (t3-code-server-path local "/ssh:devbox:/src/app/"))
+    ;; A remote host uses the default method until a TRAMP buffer reaches it.
+    (should (equal (t3-code-local-file remote "/src/app") "/sshx:devbox.example.com:/src/app"))
+    (t3-code-note-directory remote "/ssh:me@devbox:/src/app/")
+    (should (equal (t3-code-local-file remote "/src/app") "/ssh:me@devbox:/src/app"))
+    (should (equal (t3-code-server-path remote "/ssh:me@devbox:/src/app/x") "/src/app/x"))
+    (should-not (t3-code-server-path remote "/src/app/x"))
+    (should-not (t3-code-server-path remote "/ssh:elsewhere:/src/app/x"))
+    ;; A forwarded port is configured explicitly.
+    (should (equal (t3-code-local-file forwarded "/src/app") "/ssh:devbox:/src/app"))
+    (t3-code-note-directory forwarded "/ssh:me@devbox:/src/")
+    (should (equal (t3-code-local-file forwarded "/src/app") "/ssh:devbox:/src/app"))))
+
 (provide 't3-code-core-test)
 ;;; t3-code-core-test.el ends here

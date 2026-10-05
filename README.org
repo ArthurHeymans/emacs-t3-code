@@ -77,6 +77,17 @@ or with =C-u=, it opens the ledger.  Run again from a T3 buffer, it restores
 the chat and input windows and focuses the input; =M-x t3-code-toggle= hides
 them.
 
+The chat and input buffers follow the thread's worktree: their
+=default-directory= is the worktree, so =C-x C-f=, =M-x compile= or =project=
+commands start there.  A server on another host is reached through TRAMP as
+=/METHOD:HOST:PATH=, using =t3-code-tramp-default-method= (=nil= means
+=tramp-default-method=); running =M-x t3-code= from a TRAMP buffer on that
+host reuses its prefix, with its user and hops, and matches the remote
+directory to its project.  For a server behind a forwarded local port, name
+the prefix in =t3-code-file-prefixes=, e.g.
+=(("http://localhost:4000" . "/ssh:devbox:"))=.  The bridge itself always
+runs locally.
+
 The chat buffer is on top and the input buffer below.  Type in the input and
 press =C-c C-c= to send.  While the thread is working, =C-c C-c= queues the
 message as a follow-up; =C-c C-s= steers the running turn instead and
@@ -120,8 +131,8 @@ visible (=t3-code-fold-settled-work=); =TAB= unfolds it.
 
 =RET= visits the file reference at point (=path:12:3=, =path#L12=, Markdown
 links, the path of an =edit= block) in another window, or browses a URL;
-=C-u RET= inverts the window choice; remote (TRAMP) names are never
-followed.  On a pending question, =RET= answers it in the minibuffer, one
+=C-u RET= inverts the window choice; TRAMP names written by the agent are
+never followed, while paths on a remote server are visited through TRAMP.  On a pending question, =RET= answers it in the minibuffer, one
 choice per prompt for multi-select questions (an empty answer finishes); on
 an attention entry it reveals the request; elsewhere it toggles the block.  =!= runs a shell command on the file at point: an
 isolated =*= marks where the file goes, otherwise it is appended, and a

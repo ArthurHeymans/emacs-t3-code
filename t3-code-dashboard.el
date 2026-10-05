@@ -476,9 +476,9 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (interactive "P")
   (let ((default-directory
          (or (when-let* ((thread (t3-code-dashboard--find-thread (tabulated-list-get-id)))
-                         (path (plist-get thread :path))
-                         ((file-directory-p path)))
-               (file-name-as-directory path))
+                         (directory (t3-code-local-file t3-code-dashboard--environment
+                                                        (plist-get thread :path))))
+               (file-name-as-directory directory))
              default-directory)))
     (t3-code-new-thread arg)))
 

@@ -18,6 +18,7 @@
 (require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'url-parse)
 
 (defgroup t3-code nil
   "An Emacs client for T3 Code."
@@ -62,7 +63,10 @@ otherwise freeze the view."
   ;; Latest normalized shell projection, kept by `t3-code-shell'.
   shell shell-reference
   ;; Request results that rarely change (model catalog, provider commands).
-  (cache (make-hash-table :test #'equal)))
+  (cache (make-hash-table :test #'equal))
+  ;; TRAMP prefix of a remote buffer that reached this server's host, kept
+  ;; so its method, user and hops are reused (see `t3-code-file-prefix').
+  remote-prefix)
 
 (cl-defstruct (t3-code-subscription
                (:constructor t3-code-subscription-create))
@@ -131,6 +135,85 @@ DIRECTORY controls where the bridge starts.  M0 accepts local directories only."
               :id id :endpoint endpoint :directory (or directory default-directory))))
         (puthash id environment t3-code--environments)
         environment)))
+
+;;;; Server files
+
+(defcustom t3-code-tramp-default-method nil
+  "TRAMP method for the files of a T3 server on another host.
+Thread worktrees of a server whose endpoint names a remote host are
+reached as /METHOD:HOST:PATH.  Opening T3 from a TRAMP buffer on that
+host reuses the buffer's own prefix instead.  nil means use
+`tramp-default-method'."
+  :type '(choice (const :tag "Use tramp-default-method" nil) string)
+  :group 't3-code)
+
+(defcustom t3-code-file-prefixes nil
+  "Alist of (ENDPOINT . PREFIX) naming where a server's files live.
+PREFIX is a TRAMP prefix such as \"/ssh:devbox:\", or \"\" for local
+files.  Use it for a remote server reached through a forwarded local
+port, whose endpoint looks local."
+  :type '(alist :key-type string :value-type string)
+  :group 't3-code)
+
+(defvar tramp-default-method)
+
+(defun t3-code--endpoint-host (environment)
+  "Return the host named by ENVIRONMENT's endpoint, or nil."
+  (when-let* ((endpoint (t3-code-environment-endpoint environment))
+              (host (url-host (url-generic-parse-url endpoint))))
+    (unless (string-empty-p host)
+      (downcase (string-trim host "\\[" "\\]")))))
+
+(defun t3-code--local-host-p (host)
+  "Whether HOST names this machine."
+  (or (null host)
+      (member host '("localhost" "127.0.0.1" "::1" "0.0.0.0"))
+      (string-prefix-p "127." host)
+      (let ((system (downcase (system-name))))
+        (or (equal host system)
+            (equal host (car (split-string system "\\.")))))))
+
+(defun t3-code--same-host-p (left right)
+  "Whether hosts LEFT and RIGHT match, allowing a short name for an FQDN."
+  (when (and left right)
+    (let ((left (downcase left)) (right (downcase right)))
+      (or (equal left right)
+          (and (not (string-search "." left))
+               (equal left (car (split-string right "\\."))))
+          (and (not (string-search "." right))
+               (equal right (car (split-string left "\\."))))))))
+
+(defun t3-code-file-prefix (environment)
+  "Return the TRAMP prefix of ENVIRONMENT's server files, or nil when local."
+  (let ((override (assoc (t3-code-environment-endpoint environment) t3-code-file-prefixes))
+        (host (t3-code--endpoint-host environment)))
+    (cond (override (unless (string-empty-p (cdr override)) (cdr override)))
+          ((t3-code--local-host-p host) nil)
+          ((t3-code-environment-remote-prefix environment))
+          (t (require 'tramp)
+             (format "/%s:%s:" (or t3-code-tramp-default-method tramp-default-method)
+                     host)))))
+
+(defun t3-code-note-directory (environment directory)
+  "Remember the TRAMP prefix of DIRECTORY when it reaches ENVIRONMENT's host."
+  (when-let* ((prefix (file-remote-p directory))
+              ((not (assoc (t3-code-environment-endpoint environment)
+                           t3-code-file-prefixes)))
+              ((t3-code--same-host-p (file-remote-p directory 'host)
+                                     (t3-code--endpoint-host environment))))
+    (setf (t3-code-environment-remote-prefix environment) prefix)))
+
+(defun t3-code-local-file (environment path)
+  "Return server PATH of ENVIRONMENT as an Emacs file name, or nil."
+  (when (and (stringp path) (file-name-absolute-p path) (not (file-remote-p path)))
+    (concat (t3-code-file-prefix environment) path)))
+
+(defun t3-code-server-path (environment file)
+  "Return Emacs FILE as a path on ENVIRONMENT's server, or nil if elsewhere."
+  (let ((prefix (t3-code-file-prefix environment))
+        (file (expand-file-name file)))
+    (cond ((null prefix) (unless (file-remote-p file) file))
+          ((equal (file-remote-p file) (file-remote-p prefix)) (file-local-name file)))))
 
 (defun t3-code--next-id (environment prefix)
   "Return a stable next ID in ENVIRONMENT with PREFIX."

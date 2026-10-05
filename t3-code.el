@@ -136,10 +136,17 @@ A rejected credential is dropped, and a rejected stored one is reported."
 (defun t3-code--environment (&optional endpoint)
   "Return the connected environment for ENDPOINT, connecting if needed."
   (let* ((endpoint (or endpoint t3-code-default-endpoint))
-         (environment (t3-code-get-environment endpoint endpoint default-directory)))
+         (environment (t3-code-get-environment endpoint endpoint
+                                               (t3-code--bridge-directory))))
+    (t3-code-note-directory environment default-directory)
     (unless (process-live-p (t3-code-environment-process environment))
       (t3-code--reconnect environment))
     (t3-code-shell-ensure environment)))
+
+(defun t3-code--bridge-directory ()
+  "Return a local directory to start the bridge in.
+The bridge always runs on this machine, even when visiting remote files."
+  (if (file-remote-p default-directory) (expand-file-name "~/") default-directory))
 
 (defun t3-code--current-environment ()
   "Return the environment of the current T3 buffer, or the default one."
@@ -216,21 +223,23 @@ prompt."
   (let ((session (t3-code--session-buffers)))
     (if (and session (buffer-live-p (car session)) (not ledger))
         (t3-code-thread-show (car session) t)
-      (let ((environment (t3-code--environment))
-            (directory default-directory))
+      (let* ((environment (t3-code--environment))
+             (directory (t3-code-server-path environment default-directory)))
         (if ledger
             (t3-code-dashboard environment)
           (t3-code--when-shell
            environment
            (lambda (ready)
-             (let* ((project (and ready (t3-code-shell-project-for-directory
-                                         environment directory)))
+             (let* ((project (and ready directory
+                                  (t3-code-shell-project-for-directory
+                                   environment directory)))
                     (thread (and project (t3-code--project-thread project directory))))
                (cond
                 (thread (t3-code-thread-open environment thread))
                 ((and project (y-or-n-p (format "No active thread in %s; start one? "
                                                 (plist-get project :name))))
-                 (let ((default-directory directory)) (t3-code-new-thread)))
+                 (let ((default-directory (t3-code-local-file environment directory)))
+                   (t3-code-new-thread)))
                 (t (t3-code-dashboard environment)))))))))))
 
 ;;;###autoload
@@ -305,7 +314,8 @@ prompt."
                                       (buffer-local-value 't3-code-thread--thread-id
                                                           t3-code-compose--origin-buffer)))))
         (car (t3-code-shell-find-thread environment thread-id)))
-      (t3-code-shell-project-for-directory environment default-directory)))
+      (when-let* ((directory (t3-code-server-path environment default-directory)))
+        (t3-code-shell-project-for-directory environment directory))))
 
 (defun t3-code-resume ()
   "Resume a settled or archived thread of the current project.
@@ -458,7 +468,8 @@ environment or the T3 environment state.  Reconnecting requires a new token."
       (user-error "Enter an HTTP(S) URL without embedded credentials"))
     (let* ((token (read-passwd (if bearer "T3 bearer token: "
                                  "T3 pairing token (C-u for bearer): ")))
-           (environment (t3-code-get-environment endpoint endpoint default-directory)))
+           (environment (t3-code-get-environment endpoint endpoint
+                                                 (t3-code--bridge-directory))))
       (when (string-empty-p token) (user-error "Token cannot be empty"))
       ;; Restart also re-subscribes existing ledger and thread views.
       (t3-code-restart environment (cons (if bearer 'bearer 'pairing) token))
