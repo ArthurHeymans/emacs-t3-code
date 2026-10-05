@@ -65,18 +65,28 @@ new worktree from the current branch."
   "Functions saving a new auth-source credential, by environment ID.
 They run once the server has accepted the credential.")
 
-(defun t3-code--auth-source-spec (endpoint)
-  "Return the `auth-source-search' host and port spec for ENDPOINT."
-  (let ((url (url-generic-parse-url endpoint)))
-    (list :host (url-host url)
+(defconst t3-code--loopback-hosts '("localhost" "127.0.0.1" "::1")
+  "Names of this machine's loopback interface, interchangeable in auth-source.")
+
+(defun t3-code--auth-source-spec (endpoint &optional lookup)
+  "Return the `auth-source-search' host and port spec for ENDPOINT.
+With LOOKUP, a loopback host also matches entries under its other names,
+so an entry for 127.0.0.1 serves http://localhost:PORT."
+  (let* ((url (url-generic-parse-url endpoint))
+         (host (string-trim (url-host url) "\\[" "\\]")))
+    (list :host (if (and lookup (member host t3-code--loopback-hosts))
+                    (cons host (remove host t3-code--loopback-hosts))
+                  host)
           :port (number-to-string (url-port url))
           :user t3-code-auth-source-user)))
 
 (defun t3-code--auth-source-credential (environment)
   "Return a bearer credential for ENVIRONMENT from `auth-source'.
 Ask for one when none is stored, and save it after a successful connection."
-  (let* ((spec (t3-code--auth-source-spec (t3-code-environment-endpoint environment)))
-         (found (car (apply #'auth-source-search :max 1 :require '(:secret) spec)))
+  (let* ((endpoint (t3-code-environment-endpoint environment))
+         (spec (t3-code--auth-source-spec endpoint))
+         (found (car (apply #'auth-source-search :max 1 :require '(:secret)
+                            (t3-code--auth-source-spec endpoint t))))
          (entry (or found
                     (let ((auth-source-creation-prompts
                            '((secret . "T3 bearer token for %h:%p (t3 auth session issue --token-only): "))))

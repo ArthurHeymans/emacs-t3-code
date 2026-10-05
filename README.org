@@ -56,7 +56,9 @@ offers to save it as:
 machine 127.0.0.1 port 3773 login t3-code password BEARER-TOKEN
 #+end_example
 
-Later connections use it without asking.  A rejected stored token is
+The entry's =machine= and =port= must match the endpoint; for a local server
+=localhost=, =127.0.0.1= and =::1= are interchangeable.  Later connections
+use it without asking.  A rejected stored token is
 reported; update or remove its entry and reconnect.  To be asked every time
 instead, set =t3-code-token= to =ask= (with =t3-code-token-type= =pairing=
 for one-time tokens from =t3 auth pairing create=).  A string value is used

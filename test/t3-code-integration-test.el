@@ -352,5 +352,21 @@
       (auth-source-forget-all-cached)
       (delete-file netrc))))
 
+(ert-deftest t3-code-test-auth-source-loopback-names-are-interchangeable ()
+  (let* ((netrc (make-temp-file "t3-authinfo" nil nil
+                                "machine 127.0.0.1 port 13773 login t3-code password stored\n"))
+         (auth-sources (list netrc))
+         (t3-code--pending-credential-saves (make-hash-table :test #'equal))
+         (t3-code-token 'auth-source)
+         (environment (t3-code-environment-create
+                       :id "loopback" :endpoint "http://localhost:13773")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-passwd)
+                   (lambda (&rest _) (ert-fail "Must use the stored 127.0.0.1 entry"))))
+          (auth-source-forget-all-cached)
+          (should (equal (t3-code--configured-credential environment) '(bearer . "stored"))))
+      (auth-source-forget-all-cached)
+      (delete-file netrc))))
+
 (provide 't3-code-integration-test)
 ;;; t3-code-integration-test.el ends here
