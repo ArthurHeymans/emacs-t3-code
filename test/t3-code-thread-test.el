@@ -649,6 +649,33 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
                      '("/ssh:host:/srv/app/src/a.el" 3 nil))))))
 
 
+(ert-deftest t3-code-test-thread-names-buffers-after-worktree-and-title ()
+  (save-window-excursion
+    (let ((environment (t3-code-environment-create :id "names" :state 'ready
+                                                   :endpoint "http://localhost:3773"))
+          chat)
+      (cl-letf (((symbol-function 't3-code-subscribe) (lambda (&rest _) nil))
+                ((symbol-function 't3-code-shell-mark-visited) #'ignore))
+        (unwind-protect
+            (progn
+              (setq chat (t3-code-thread-open environment
+                                              '(:id "t1" :title "Fix the\nfolds"
+                                                :path "/src/emacs-t3-code")))
+              (should (equal (buffer-name chat) "*t3 emacs-t3-code: Fix the folds*"))
+              (with-current-buffer chat
+                (should (equal (buffer-name t3-code-thread--composer)
+                               " *t3 emacs-t3-code: Fix the folds · input*"))
+                (t3-code-thread--receive
+                 '(:kind "snapshot" :payload (:thread (:title "Renamed"
+                                                       :worktreePath "/src/wt")))))
+              (should (equal (buffer-name chat) "*t3 wt: Renamed*"))
+              (should (eq (t3-code-thread-buffer environment "t1") chat)))
+          (when (buffer-live-p chat)
+            (with-current-buffer chat
+              (when (buffer-live-p t3-code-thread--composer)
+                (kill-buffer t3-code-thread--composer)))
+            (kill-buffer chat)))))))
+
 (ert-deftest t3-code-test-thread-switch-from-input-replaces-chat-and-input ()
   (save-window-excursion
     (delete-other-windows)
@@ -663,8 +690,8 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
               (should (with-current-buffer (window-buffer) (derived-mode-p 't3-code-compose-mode)))
               (push (t3-code-thread-open environment '(:id "two")) buffers)
               (should (= (length (window-list)) 2))
-              (should (equal (buffer-name (window-buffer (frame-first-window)))
-                             (t3-code-thread-buffer-name environment "two")))
+              (should (eq (window-buffer (frame-first-window))
+                          (t3-code-thread-buffer environment "two")))
               (should (with-current-buffer (window-buffer) (derived-mode-p 't3-code-compose-mode)))
               (should (> (window-height (frame-first-window)) (window-height))))
           (dolist (buffer buffers)

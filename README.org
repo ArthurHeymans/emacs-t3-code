@@ -88,7 +88,10 @@ the prefix in =t3-code-file-prefixes=, e.g.
 =(("http://localhost:4000" . "/ssh:devbox:"))=.  The bridge itself always
 runs locally.
 
-The chat buffer is on top and the input buffer below.  Type in the input and
+The chat buffer is on top and the input buffer below.  Chats are named after
+their worktree directory and title, e.g. =*t3 emacs-t3-code: Fix the folds*=
+(with the host for a remote server), and follow renames.  The input buffer
+travels with its chat and is hidden from buffer lists.  Type in the input and
 press =C-c C-c= to send.  While the thread is working, =C-c C-c= queues the
 message as a follow-up; =C-c C-s= steers the running turn instead and
 =C-c C-k= aborts it.

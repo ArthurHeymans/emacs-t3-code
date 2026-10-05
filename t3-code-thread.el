@@ -762,7 +762,18 @@ FALLBACK names the model when SELECTION is nil."
   (setq-local completion-at-point-functions
               (list #'t3-code-compose-completion-at-point t))
   (add-hook 'after-change-functions #'t3-code-compose--refit nil t)
+  ;; Input buffers are hidden by a leading space, which disables undo.
+  (buffer-enable-undo)
   (visual-line-mode 1))
+
+(defun t3-code-compose--find (environment thread-id)
+  "Return the live input buffer of THREAD-ID in ENVIRONMENT, or nil."
+  (seq-find (lambda (buffer)
+              (with-current-buffer buffer
+                (and (derived-mode-p 't3-code-compose-mode)
+                     (eq t3-code-compose--environment environment)
+                     (equal t3-code-compose--thread-id thread-id))))
+            (buffer-list)))
 
 (defun t3-code-compose--fit-window (window)
   "Fit input WINDOW to its draft within the configured height bounds."
@@ -821,10 +832,12 @@ An input window already there, or selected, is reused rather than split."
   "Focus this thread's input, preselecting DISPATCH-MODE for the next send."
   (interactive)
   (let* ((origin (current-buffer))
-         (buffer (get-buffer-create
-                  (format "*t3-input:%s/%s*"
-                          (t3-code-environment-id t3-code-thread--environment)
-                          t3-code-thread--thread-id))))
+         (buffer (if (buffer-live-p t3-code-thread--composer)
+                     t3-code-thread--composer
+                   ;; An input outlives its chat with the draft; adopt it again.
+                   (or (t3-code-compose--find t3-code-thread--environment
+                                              t3-code-thread--thread-id)
+                       (generate-new-buffer " *t3-input*")))))
     (setq t3-code-thread--composer buffer)
     (with-current-buffer buffer
       (unless (derived-mode-p 't3-code-compose-mode) (t3-code-compose-mode))
@@ -835,7 +848,9 @@ An input window already there, or selected, is reused rather than split."
             t3-code-compose--dispatch-mode
             (unless (equal dispatch-mode "auto") dispatch-mode)
             t3-code-compose--origin-buffer origin))
-    (with-current-buffer origin (t3-code-thread--follow-directory))
+    (with-current-buffer origin
+      (t3-code-thread--follow-directory)
+      (t3-code-thread--update-names t))
     (t3-code-compose--display buffer)
     buffer))
 
@@ -867,8 +882,8 @@ An input window already there, or selected, is reused rather than split."
 (defun t3-code-compose-open-launch (environment launch)
   "Open an input that creates a thread in ENVIRONMENT from LAUNCH parameters."
   (let ((buffer (get-buffer-create
-                 (format "*t3-input:%s/new:%s*" (t3-code-environment-id environment)
-                         (plist-get launch :projectName)))))
+                 (format " *t3-input new %s: %s*" (plist-get launch :projectName)
+                         (t3-code-environment-id environment)))))
     (with-current-buffer buffer
       (unless (derived-mode-p 't3-code-compose-mode) (t3-code-compose-mode))
       (setq t3-code-compose--environment environment
@@ -1514,6 +1529,36 @@ exist; a remote one is not checked, which would open a TRAMP connection."
           (setq default-directory directory
                 list-buffers-directory directory))))))
 
+(defvar-local t3-code-thread--name nil
+  "Name last given to this chat, before Emacs made it unique.")
+
+(defun t3-code-thread--name ()
+  "Return \"t3 PLACE: TITLE\" naming this chat after its worktree and topic.
+PLACE is the worktree directory, after the host of a remote server."
+  (let* ((thread (t3-code-thread--thread))
+         (title (or (plist-get thread :title)
+                    (plist-get (t3-code-thread--shell-thread) :title)
+                    t3-code-thread--thread-id))
+         (path (t3-code-thread--worktree-path))
+         (host (and (t3-code-file-prefix t3-code-thread--environment)
+                    (t3-code--endpoint-host t3-code-thread--environment))))
+    (format "t3 %s%s: %s"
+            (if host (concat host ":") "")
+            (if path (file-name-nondirectory (directory-file-name path)) "?")
+            (truncate-string-to-width (replace-regexp-in-string "[\n\t ]+" " " title)
+                                      60 nil nil "…"))))
+
+(defun t3-code-thread--update-names (&optional force)
+  "Rename the chat and its hidden input after the worktree and title.
+Only a changed name renames, unless FORCE."
+  (when-let* ((name (and t3-code-thread--environment (t3-code-thread--name)))
+              ((or force (not (equal name t3-code-thread--name)))))
+    (setq t3-code-thread--name name)
+    (rename-buffer (format "*%s*" name) t)
+    (when (buffer-live-p t3-code-thread--composer)
+      (with-current-buffer t3-code-thread--composer
+        (rename-buffer (format " *%s · input*" name) t)))))
+
 (defun t3-code-thread--resolve-file (candidate root &optional prefix)
   "Resolve CANDIDATE against server path ROOT; return (FILE LINE COLUMN).
 PREFIX is the TRAMP prefix of the server's files, nil when local.  Names
@@ -1827,6 +1872,7 @@ only synchronization proves that its stream has recovered."
     (when (or (not (equal t3-code-thread--payload t3-code-thread--rendered-payload))
               (not (equal t3-code-thread--stream-error t3-code-thread--rendered-error)))
       (t3-code-thread--follow-directory)
+      (t3-code-thread--update-names)
       (t3-code-thread--refresh))))
 
 (defvar t3-code-thread--display-action
@@ -1857,9 +1903,9 @@ instead of the chat landing in the small input window."
 (defun t3-code-thread-open (environment thread)
   "Open normalized THREAD from ENVIRONMENT in a live chat with its input."
   (let* ((thread-id (plist-get thread :id))
-         (name (t3-code-thread-buffer-name environment thread-id))
-         (fresh (not (get-buffer name)))
-         (buffer (get-buffer-create name)))
+         (existing (t3-code-thread-buffer environment thread-id))
+         (fresh (not existing))
+         (buffer (or existing (generate-new-buffer "*t3*"))))
     (with-current-buffer buffer
       (unless (derived-mode-p 't3-code-thread-mode)
         (t3-code-thread-mode))
@@ -1867,6 +1913,7 @@ instead of the chat landing in the small input window."
             t3-code-thread--thread-id thread-id
             t3-code-thread--summary thread)
       (t3-code-thread--follow-directory)
+      (t3-code-thread--update-names)
       (unless t3-code-thread--subscription
         (setq t3-code-thread--subscription
               (t3-code-subscribe

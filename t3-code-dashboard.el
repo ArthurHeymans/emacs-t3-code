@@ -531,7 +531,9 @@ token).  Plain refresh never asks for a token, even after a disconnect."
 
 (defun t3-code-dashboard (environment)
   "Display a dashboard for shared ENVIRONMENT."
-  (let ((buffer (get-buffer-create (format "*t3:%s*" (t3-code-environment-id environment)))))
+  (let ((buffer (get-buffer-create
+                 (let ((url (url-generic-parse-url (t3-code-environment-endpoint environment))))
+                   (format "*t3 ledger: %s:%s*" (url-host url) (url-port url))))))
     (with-current-buffer buffer
       (unless (derived-mode-p 't3-code-dashboard-mode)
         (t3-code-dashboard-mode))

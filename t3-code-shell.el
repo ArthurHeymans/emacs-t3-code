@@ -24,9 +24,16 @@ and nil stays silent.  Threads visible in a window are never announced."
 (defvar t3-code-shell-update-functions nil
   "Abnormal hook run with (ENVIRONMENT OLD NEW) shell payloads after a change.")
 
-(defun t3-code-thread-buffer-name (environment thread-id)
-  "Return the transcript buffer name for THREAD-ID in ENVIRONMENT."
-  (format "*t3:%s/%s*" (t3-code-environment-id environment) thread-id))
+(defun t3-code-thread-buffer (environment thread-id)
+  "Return the live chat buffer of THREAD-ID in ENVIRONMENT, or nil.
+Chats are named after their title and worktree, so they are found by
+identity rather than by name."
+  (seq-find (lambda (buffer)
+              (with-current-buffer buffer
+                (and (derived-mode-p 't3-code-thread-mode)
+                     (eq (bound-and-true-p t3-code-thread--environment) environment)
+                     (equal (bound-and-true-p t3-code-thread--thread-id) thread-id))))
+            (buffer-list)))
 
 (defun t3-code-shell--receive (environment message)
   "Store a shell MESSAGE for ENVIRONMENT and notify observers."
@@ -120,7 +127,7 @@ project.  The most specific match wins."
 
 (defun t3-code-shell--visible-p (environment thread-id)
   "Whether THREAD-ID of ENVIRONMENT is displayed in a visible window."
-  (when-let* ((buffer (get-buffer (t3-code-thread-buffer-name environment thread-id))))
+  (when-let* ((buffer (t3-code-thread-buffer environment thread-id)))
     (get-buffer-window buffer 'visible)))
 
 (defun t3-code-shell--transition (old-thread new-thread)
