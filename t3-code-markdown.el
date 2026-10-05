@@ -46,18 +46,26 @@ a specific mode; nil shows plain text."
 (defvar t3-code-markdown--cache (make-hash-table :test #'equal)
   "Fontified strings keyed by (MODE HIDE-MARKUP TEXT).")
 
+(defvar t3-code-markdown--auto-mode 'unknown
+  "Markdown mode chosen by `auto', or nil when none is available.
+Probing is cached: a failing `require' searches the whole `load-path', and
+fontifying runs for every item of every streaming update.")
+
 (defun t3-code-markdown--resolve-mode (kind)
   "Return the major mode used to fontify text of KIND, or nil."
   (pcase kind
     ('diff 'diff-mode)
     ('markdown
-     (if (eq t3-code-markdown-mode 'auto)
-         (cond ((require 'markdown-mode nil t) 'gfm-mode)
-               ((and (require 'markdown-ts-mode nil t)
-                     (fboundp 'treesit-ready-p)
-                     (treesit-ready-p 'markdown t))
-                'markdown-ts-mode))
-       t3-code-markdown-mode))))
+     (if (not (eq t3-code-markdown-mode 'auto))
+         t3-code-markdown-mode
+       (when (eq t3-code-markdown--auto-mode 'unknown)
+         (setq t3-code-markdown--auto-mode
+               (cond ((require 'markdown-mode nil t) 'gfm-mode)
+                     ((and (require 'markdown-ts-mode nil t)
+                           (fboundp 'treesit-ready-p)
+                           (treesit-ready-p 'markdown t))
+                      'markdown-ts-mode))))
+       t3-code-markdown--auto-mode))))
 
 (defun t3-code-markdown--buffer (mode)
   "Return a hidden buffer prepared for fontifying with MODE."

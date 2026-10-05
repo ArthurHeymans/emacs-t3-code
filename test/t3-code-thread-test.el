@@ -169,10 +169,40 @@
     (should (string-match-p "Could not load thread" (buffer-string)))
     (should (string-match-p "safe failure" (buffer-string)))))
 
+(ert-deftest t3-code-test-thread-coalesces-renders-of-streamed-updates ()
+  (save-window-excursion
+    (let ((buffer (generate-new-buffer " *t3-coalesce*"))
+          (t3-code-render-interval 60)
+          (payload (lambda (text) (list :thread '(:id "t")
+                                        :items (list (list :id "a" :type "assistant_message"
+                                                           :text text))))))
+      (unwind-protect
+          (with-current-buffer buffer
+            (t3-code-thread-mode)
+            ;; Hidden: nothing renders until the chat is displayed.
+            (t3-code-thread--receive (list :kind "event" :payload (funcall payload "one")))
+            (should-not (string-match-p "one" (buffer-string)))
+            (switch-to-buffer buffer)
+            (run-hook-with-args 'window-buffer-change-functions (selected-window))
+            (should (string-match-p "one" (buffer-string)))
+            ;; Visible: the first update renders, later ones wait for the timer.
+            (t3-code-thread--receive (list :kind "event" :payload (funcall payload "two")))
+            (should (string-match-p "two" (buffer-string)))
+            (t3-code-thread--receive (list :kind "event" :payload (funcall payload "three")))
+            (should-not (string-match-p "three" (buffer-string)))
+            (should (timerp t3-code-thread--render-timer))
+            (timer-event-handler t3-code-thread--render-timer)
+            (should (string-match-p "three" (buffer-string))))
+        (with-current-buffer buffer
+          (when (timerp t3-code-thread--render-timer)
+            (cancel-timer t3-code-thread--render-timer)))
+        (kill-buffer buffer)))))
+
 (ert-deftest t3-code-test-thread-retains-last-good-snapshot-on-stream-error ()
   (with-temp-buffer
     (t3-code-thread-mode)
-    (let ((good '(:thread (:id "thread-1" :title "Example")
+    (let ((t3-code-render-interval nil)
+          (good '(:thread (:id "thread-1" :title "Example")
                   :items ((:id "answer" :type "assistant_message"
                            :label "Assistant" :text "Still here"))))
           (failure '(:thread nil :items nil :error "SocketCloseError: 1005")))

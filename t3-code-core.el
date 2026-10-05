@@ -323,8 +323,8 @@ port, whose endpoint looks local."
     (if (not (eq process (t3-code-environment-process environment)))
         (t3-code--diagnose environment "Ignored output from stale bridge process")
       (process-put process 't3-code-partial-output-chunks (cdr result))
-      (when (> (string-bytes (t3-code--line-chunks-string (cdr result)))
-               t3-code-max-line-bytes)
+      ;; Sum the chunks: concatenating them per read is quadratic in a long line.
+      (when (> (apply #'+ (mapcar #'string-bytes (cdr result))) t3-code-max-line-bytes)
         (t3-code--diagnose environment "Rejected oversized partial bridge line")
         (delete-process process))
       (dolist (line (car result))

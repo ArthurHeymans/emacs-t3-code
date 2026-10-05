@@ -24,16 +24,25 @@ and nil stays silent.  Threads visible in a window are never announced."
 (defvar t3-code-shell-update-functions nil
   "Abnormal hook run with (ENVIRONMENT OLD NEW) shell payloads after a change.")
 
+(defvar t3-code--thread-buffers (make-hash-table :test #'equal)
+  "Chat buffers keyed by (ENVIRONMENT-ID THREAD-ID).
+Chats are named after their title and worktree, so they are found here
+rather than by name.  Shell updates look up every thread, so this must
+not scan the buffer list.")
+
 (defun t3-code-thread-buffer (environment thread-id)
-  "Return the live chat buffer of THREAD-ID in ENVIRONMENT, or nil.
-Chats are named after their title and worktree, so they are found by
-identity rather than by name."
-  (seq-find (lambda (buffer)
-              (with-current-buffer buffer
-                (and (derived-mode-p 't3-code-thread-mode)
-                     (eq (bound-and-true-p t3-code-thread--environment) environment)
-                     (equal (bound-and-true-p t3-code-thread--thread-id) thread-id))))
-            (buffer-list)))
+  "Return the live chat buffer of THREAD-ID in ENVIRONMENT, or nil."
+  (let* ((key (list (t3-code-environment-id environment) thread-id))
+         (buffer (gethash key t3-code--thread-buffers)))
+    (if (buffer-live-p buffer)
+        buffer
+      (remhash key t3-code--thread-buffers)
+      nil)))
+
+(defun t3-code-thread-register-buffer (environment thread-id buffer)
+  "Record BUFFER as the chat of THREAD-ID in ENVIRONMENT."
+  (puthash (list (t3-code-environment-id environment) thread-id) buffer
+           t3-code--thread-buffers))
 
 (defun t3-code-shell--receive (environment message)
   "Store a shell MESSAGE for ENVIRONMENT and notify observers."

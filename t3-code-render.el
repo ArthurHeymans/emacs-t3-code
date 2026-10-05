@@ -591,11 +591,53 @@ group names its latest activity."
 (defvar t3-code-thread-refresh-hook nil
   "Hook run in a transcript buffer after it has been re-rendered.")
 
+(defcustom t3-code-render-interval 0.1
+  "Minimum seconds between renders of a chat receiving updates, or nil.
+The bridge sends the whole thread for every streamed token, and rendering
+each would freeze Emacs while several threads work.  Updates arriving
+sooner are coalesced, and chats not shown in any window render when
+displayed again.  nil renders every update at once."
+  :type '(choice (number :tag "Seconds") (const :tag "Every update" nil))
+  :group 't3-code)
+
+(defvar-local t3-code-thread--render-timer nil)
+(defvar-local t3-code-thread--render-pending nil
+  "Non-nil when updates arrived since the last render.")
+
+(defun t3-code-thread--request-refresh ()
+  "Render this chat now, or once visible and the render interval passed."
+  (cond ((null t3-code-render-interval) (t3-code-thread--refresh))
+        ((or (timerp t3-code-thread--render-timer)
+             (not (get-buffer-window nil t)))
+         (setq t3-code-thread--render-pending t))
+        (t (t3-code-thread--refresh)
+           (t3-code-thread--arm-render-timer))))
+
+(defun t3-code-thread--arm-render-timer ()
+  "Render updates still pending after `t3-code-render-interval'."
+  (let ((buffer (current-buffer)))
+    (setq t3-code-thread--render-timer
+          (run-at-time t3-code-render-interval nil
+                       (lambda ()
+                         (when (buffer-live-p buffer)
+                           (with-current-buffer buffer
+                             (setq t3-code-thread--render-timer nil)
+                             (when (and t3-code-thread--render-pending
+                                        (get-buffer-window nil t))
+                               (t3-code-thread--refresh)
+                               (t3-code-thread--arm-render-timer)))))))))
+
+(defun t3-code-thread--render-when-shown (_window)
+  "Render updates that arrived while this chat was not displayed."
+  (when t3-code-thread--render-pending
+    (t3-code-thread--refresh)))
+
 (defun t3-code-thread--refresh ()
   "Update the transcript while preserving semantic point and window anchors."
   (when (and (derived-mode-p 't3-code-thread-mode)
              (not (bound-and-true-p isearch-mode)))
     (unless t3-code-thread--visibility (t3-code-thread-render-setup))
+    (setq t3-code-thread--render-pending nil)
     (let* ((anchor (t3-code-thread--anchor (point)))
            (windows (mapcar (lambda (window)
                               (list window

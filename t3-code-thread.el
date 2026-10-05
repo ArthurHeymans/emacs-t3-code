@@ -769,10 +769,10 @@ FALLBACK names the model when SELECTION is nil."
 (defun t3-code-compose--find (environment thread-id)
   "Return the live input buffer of THREAD-ID in ENVIRONMENT, or nil."
   (seq-find (lambda (buffer)
-              (with-current-buffer buffer
-                (and (derived-mode-p 't3-code-compose-mode)
-                     (eq t3-code-compose--environment environment)
-                     (equal t3-code-compose--thread-id thread-id))))
+              ;; Avoid switching into every buffer just to test its mode.
+              (and (eq (buffer-local-value 'major-mode buffer) 't3-code-compose-mode)
+                   (eq (buffer-local-value 't3-code-compose--environment buffer) environment)
+                   (equal (buffer-local-value 't3-code-compose--thread-id buffer) thread-id)))
             (buffer-list)))
 
 (defun t3-code-compose--fit-window (window)
@@ -1835,6 +1835,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (t3-code-thread-render-setup)
   (visual-line-mode 1)
   (add-hook 't3-code-thread-refresh-hook #'t3-code-thread--update-phase nil t)
+  (add-hook 'window-buffer-change-functions #'t3-code-thread--render-when-shown nil t)
   (add-hook 'kill-buffer-hook #'t3-code-thread--cleanup nil t))
 
 (defun t3-code-thread--retain-displaced (old new)
@@ -1873,7 +1874,9 @@ only synchronization proves that its stream has recovered."
               (not (equal t3-code-thread--stream-error t3-code-thread--rendered-error)))
       (t3-code-thread--follow-directory)
       (t3-code-thread--update-names)
-      (t3-code-thread--refresh))))
+      ;; The phase drives headers and notifications even while hidden.
+      (t3-code-thread--update-phase)
+      (t3-code-thread--request-refresh))))
 
 (defvar t3-code-thread--display-action
   '((display-buffer-reuse-window display-buffer-same-window))
@@ -1906,6 +1909,7 @@ instead of the chat landing in the small input window."
          (existing (t3-code-thread-buffer environment thread-id))
          (fresh (not existing))
          (buffer (or existing (generate-new-buffer "*t3*"))))
+    (t3-code-thread-register-buffer environment thread-id buffer)
     (with-current-buffer buffer
       (unless (derived-mode-p 't3-code-thread-mode)
         (t3-code-thread-mode))
