@@ -84,8 +84,8 @@ message as a follow-up; =C-c C-s= steers the running turn instead and
 
 The input header shows the model (click to change), reasoning effort (click
 to cycle), activity phase, context usage, thread title, runtime mode, queued
-messages and a global indicator of working (⚙) and newly finished (✓) threads
-that opens the ledger.
+messages and a global count of active and newly done threads that opens the
+ledger.
 
 ** Composing
 

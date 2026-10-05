@@ -108,10 +108,12 @@ project.  The most specific match wins."
   (when (and environment (t3-code-environment-shell environment))
     (pcase-let ((`(,working . ,unseen) (t3-code-shell-counts environment)))
       (when (or (> working 0) (> unseen 0))
-        (propertize (concat (if (> working 0) (format "⚙%d" working) "")
-                            (if (and (> working 0) (> unseen 0)) " " "")
-                            (if (> unseen 0) (format "✓%d" unseen) ""))
-                    'face 'shadow
+        ;; Plain text, as in pi: symbol glyphs fall back to fonts whose
+        ;; taller lines inflate the header line.
+        (propertize (string-join (delq nil (list (and (> working 0) (format "%d active" working))
+                                                 (and (> unseen 0) (format "%d done" unseen))))
+                                 " · ")
+                    'face (if (> unseen 0) 'success 'warning)
                     'mouse-face 'highlight
                     'help-echo "mouse-1: open the T3 ledger"
                     'local-map t3-code-shell-indicator-map)))))

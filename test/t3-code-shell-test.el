@@ -49,7 +49,7 @@
                    "p"))
     (should-not (t3-code-shell-project-for-directory environment "/elsewhere"))
     (should (equal (t3-code-shell-counts environment) '(1 . 1)))
-    (should (equal (substring-no-properties (t3-code-shell-indicator environment)) "⚙1 ✓1"))
+    (should (equal (substring-no-properties (t3-code-shell-indicator environment)) "1 active · 1 done"))
     (should (equal (plist-get (cdr (t3-code-shell-find-thread environment "b")) :path)
                    "/work/wt/feature"))))
 
