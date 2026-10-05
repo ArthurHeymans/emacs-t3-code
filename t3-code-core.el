@@ -37,6 +37,12 @@ bridge included in the repository."
   "Maximum number of bridge stderr characters retained in an exit report."
   :type 'integer)
 
+(defcustom t3-code-refresh-timeout 20
+  "Seconds a refreshing subscription waits for its snapshot before asking again.
+While refreshing, events are ignored, so a snapshot lost by the bridge would
+otherwise freeze the view."
+  :type 'number)
+
 (defcustom t3-code-max-queued-records 1000
   "Maximum records queued while a bridge is not ready."
   :type 'integer)
@@ -363,16 +369,43 @@ Omit resume state when WITHOUT-RESUME is non-nil."
                      (t3-code-subscription-sequence subscription))
             (list :resumeSequence (t3-code-subscription-sequence subscription)))))
 
-(defun t3-code--repair-subscription (environment subscription)
-  "Request an authoritative replacement snapshot for SUBSCRIPTION."
+(defun t3-code--resubscribe (environment subscription)
+  "Ask ENVIRONMENT's bridge for a fresh snapshot of SUBSCRIPTION.
+Events are ignored until it arrives; a watchdog asks again if it does not."
   (setf (t3-code-subscription-sequence subscription) nil
         (t3-code-subscription-synchronized subscription) 'refreshing)
-  (t3-code--set-state environment 'repairing)
   (t3-code--send-now environment
                      (list :kind "unsubscribe"
                            :subscriptionId (t3-code-subscription-id subscription)))
-  (t3-code--send-now environment
-                     (t3-code--subscription-record subscription t)))
+  (t3-code--send-now environment (t3-code--subscription-record subscription t))
+  (t3-code--watch-refresh environment subscription
+                          (t3-code-environment-process environment)))
+
+(defun t3-code--watch-refresh (environment subscription process)
+  "Resubscribe SUBSCRIPTION if it is still refreshing after a timeout.
+PROCESS is the bridge the request went to; a restarted bridge resubscribes
+on its own, and a released subscription needs nothing."
+  (run-at-time
+   t3-code-refresh-timeout nil
+   (lambda ()
+     (when (and (eq (t3-code-subscription-synchronized subscription) 'refreshing)
+                (eq subscription (gethash (t3-code-subscription-id subscription)
+                                          (t3-code-environment-subscriptions environment)))
+                (eq process (t3-code-environment-process environment))
+                (process-live-p process))
+       (if (eq (t3-code-environment-state environment) 'ready)
+           (progn
+             (t3-code--diagnose environment "No snapshot for %s after %ss; resubscribing"
+                                (t3-code-subscription-id subscription)
+                                t3-code-refresh-timeout)
+             (t3-code--resubscribe environment subscription))
+         ;; The bridge is reconnecting; it resubscribes when ready.
+         (t3-code--watch-refresh environment subscription process))))))
+
+(defun t3-code--repair-subscription (environment subscription)
+  "Request an authoritative replacement snapshot for SUBSCRIPTION."
+  (t3-code--set-state environment 'repairing)
+  (t3-code--resubscribe environment subscription))
 
 (defun t3-code--handle-subscription-message (environment message)
   "Apply normalized subscription MESSAGE in ENVIRONMENT."
@@ -576,10 +609,7 @@ Keep ENVIRONMENT's bridge connection alive."
          (id (t3-code-subscription-id subscription)))
     (unless (eq subscription (gethash id (t3-code-environment-subscriptions environment)))
       (user-error "T3 subscription is no longer active"))
-    (setf (t3-code-subscription-sequence subscription) nil
-          (t3-code-subscription-synchronized subscription) 'refreshing)
-    (t3-code--send-now environment (list :kind "unsubscribe" :subscriptionId id))
-    (t3-code--send-now environment (t3-code--subscription-record subscription t))))
+    (t3-code--resubscribe environment subscription)))
 
 (defun t3-code-unsubscribe (environment reference)
   "Release view-specific subscription REFERENCE from ENVIRONMENT."

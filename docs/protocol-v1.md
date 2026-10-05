@@ -53,7 +53,7 @@ Bridge output:
 {"kind":"synchronized","subscriptionId":"shell:null","generation":2,"sequence":43}
 ```
 
-A snapshot is authoritative. Events are ordered. Duplicate sequences are ignored. A gap causes the client to unsubscribe and request an authoritative snapshot without a resume sequence. Records from stale connection generations are ignored.
+A snapshot is authoritative. Events are ordered. Duplicate sequences are ignored. A gap causes the client to unsubscribe and request an authoritative snapshot without a resume sequence. Events are ignored until that snapshot arrives; if none arrives within `t3-code-refresh-timeout` seconds while the bridge is ready, the client asks again. Records from stale connection generations are ignored.
 
 Subscriptions are reference counted in Emacs. Killing one view releases its reference but does not disconnect the shared environment.
 

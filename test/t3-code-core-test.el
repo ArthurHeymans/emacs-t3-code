@@ -202,5 +202,36 @@
                                   (car (t3-code-environment-diagnostics environment)))))
       (delete-process process))))
 
+(ert-deftest t3-code-test-refresh-watchdog-resubscribes-until-snapshot ()
+  (let* ((environment (t3-code-environment-create
+                       :id "local" :generation 1 :state 'ready :process 'bridge))
+         (subscription (t3-code-subscription-create
+                        :id "shell:null" :kind "shell" :sequence 41))
+         (reference (t3-code-subscription-reference-create
+                     :subscription subscription :token "listener"))
+         sent timers)
+    (puthash "shell:null" subscription (t3-code-environment-subscriptions environment))
+    (cl-letf (((symbol-function 't3-code--send-now)
+               (lambda (_environment record) (push (plist-get record :kind) sent)))
+              ((symbol-function 'run-at-time)
+               (lambda (_time _repeat function) (push function timers)))
+              ((symbol-function 'process-live-p) (lambda (process) (eq process 'bridge))))
+      (t3-code-refresh-subscription environment reference)
+      (should (equal sent '("subscribe" "unsubscribe")))
+      ;; The bridge lost the snapshot: the watchdog asks again.
+      (funcall (pop timers))
+      (should (equal (length sent) 4))
+      ;; While the bridge reconnects it only keeps watching.
+      (setf (t3-code-environment-state environment) 'retrying)
+      (funcall (pop timers))
+      (should (equal (length sent) 4))
+      (setf (t3-code-environment-state environment) 'ready)
+      (t3-code--handle-subscription-message
+       environment '(:kind "snapshot" :subscriptionId "shell:null"
+                     :generation 1 :sequence 1 :payload (:projects ())))
+      (funcall (pop timers))
+      (should (equal (length sent) 4))
+      (should-not timers))))
+
 (provide 't3-code-core-test)
 ;;; t3-code-core-test.el ends here
