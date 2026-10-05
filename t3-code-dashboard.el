@@ -518,11 +518,15 @@ token).  Plain refresh never asks for a token, even after a disconnect."
          ("Diff" 12 nil)]
         tabulated-list-padding 2
         tabulated-list-sort-key nil)
-  (tabulated-list-init-header))
+  ;; Column names go in the buffer: the header line shows the connection
+  ;; state, including why a connection failed.
+  (setq-local tabulated-list-use-header-line nil)
+  (tabulated-list-init-header)
+  ;; Set after `tabulated-list-init-header', which clears it.
+  (setq header-line-format '(:eval (t3-code-dashboard--header-line))))
 
 (define-derived-mode t3-code-dashboard-mode tabulated-list-mode "T3-Dashboard"
   "Major mode for the read-only T3 fleet dashboard."
-  (setq header-line-format '(:eval (t3-code-dashboard--header-line)))
   (t3-code-dashboard--configure-columns)
   (setq t3-code-dashboard--settled-collapsed
         t3-code-dashboard-collapse-settled

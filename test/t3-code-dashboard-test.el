@@ -237,5 +237,24 @@
                (lambda (&rest _) (ert-fail "Refresh requested a token"))))
       (should-error (t3-code-dashboard-reconnect) :type 'user-error))))
 
+(ert-deftest t3-code-test-dashboard-header-explains-a-failed-connection ()
+  (let ((environment (t3-code-environment-create
+                      :id "down" :endpoint "http://127.0.0.1:3773" :state 'disconnected
+                      :fatal-error '(:code "websocket-ticket-failed"
+                                     :message "The environment rejected this client's credentials (invalid_credential)."))))
+    (cl-letf (((symbol-function 't3-code-subscribe) (lambda (&rest _) nil)))
+      (let ((buffer (t3-code-dashboard environment)))
+        (unwind-protect
+            (with-current-buffer buffer
+              (should (equal header-line-format '(:eval (t3-code-dashboard--header-line))))
+              (let ((header (t3-code-dashboard--header-line)))
+                (should (string-match-p "\\[disconnected\\]" header))
+                (should (string-match-p "invalid_credential" header)))
+              ;; Column names moved into the buffer.
+              (should (string-match-p "Project" (buffer-string)))
+              (should (t3-code--credential-rejected-p
+                       (t3-code-environment-fatal-error environment))))
+          (kill-buffer buffer))))))
+
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here

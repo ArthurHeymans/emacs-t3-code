@@ -114,11 +114,19 @@ A rejected credential is dropped, and a rejected stored one is reported."
       ('disconnected
        (remhash id t3-code--pending-credential-saves)
        (when (and (eq t3-code-token 'auth-source)
-                  (equal (plist-get (t3-code-environment-fatal-error environment) :code)
-                         "authentication-failed"))
+                  (t3-code--credential-rejected-p
+                   (t3-code-environment-fatal-error environment)))
          (auth-source-forget-all-cached)
-         (message "T3 rejected the credential for %s; update or remove its auth-source entry (user %s)"
+         (message "T3 rejected the credential for %s; its auth-source entry (user %s) needs a bearer token from `t3 auth session issue --token-only', not a pairing token"
                   (t3-code-environment-endpoint environment) t3-code-auth-source-user))))))
+
+(defun t3-code--credential-rejected-p (fatal)
+  "Whether bridge FATAL error means the server refused the credential.
+Servers also refuse a bearer token while issuing a WebSocket ticket, which
+the bridge reports as `websocket-ticket-failed'."
+  (or (equal (plist-get fatal :code) "authentication-failed")
+      (and (equal (plist-get fatal :code) "websocket-ticket-failed")
+           (string-match-p "invalid_credential" (or (plist-get fatal :message) "")))))
 
 (add-hook 't3-code-environment-state-hook #'t3-code--credential-state-changed)
 
