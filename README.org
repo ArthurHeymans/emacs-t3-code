@@ -156,11 +156,12 @@ the top of the chat regardless of folding.
 ** Threads
 
 The ledger (=C-c C-b=, =M-x t3-code-ledger=) lists every thread by project,
-with pinned threads first, settled threads in a collapsed menu at the bottom
-and delegated agents below their parent.  =^= marks pinned, =•= unseen and
-=z= snoozed threads.  In the ledger, =RET= opens, =N= starts a thread in the
-project at point, =+= pins, =v= archives, =/= searches, =j= switches, =r=
-resumes, =s= toggles settled threads and =g= refreshes (=C-u g= restarts the
+with pinned threads first, snoozed and then settled threads in collapsed
+menus at the bottom, and delegated agents below their parent.  =^= marks
+pinned and =•= unseen threads; a working thread stays active while snoozed.
+In the ledger, =RET= opens, =N= starts a thread in the project at point, =+=
+pins, =v= archives, =/= searches, =j= switches, =r= resumes, =z= and =s=
+toggle snoozed and settled threads and =g= refreshes (=C-u g= restarts the
 bridge).
 
 =C-c C-j= switches to any active thread with completion, grouped by project.

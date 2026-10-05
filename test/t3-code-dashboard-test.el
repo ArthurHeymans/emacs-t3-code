@@ -116,6 +116,28 @@
       (should (string-match-p "▸ Settled (1)" (buffer-string)))
       (should-not (t3-code-dashboard--goto-id "settled")))))
 
+(ert-deftest t3-code-test-dashboard-collapses-snoozed-threads ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--projects
+          '((:id "project" :name "owner/repo"
+             :threads ((:id "active" :title "Active" :status "idle")
+                       (:id "snoozed" :title "Snoozed" :status "idle"
+                        :snoozedUntil "2999-01-01T00:00:00.000Z")
+                       (:id "woke" :title "Woke" :status "idle"
+                        :snoozedUntil "2000-01-01T00:00:00.000Z")
+                       (:id "busy" :title "Busy" :status "running"
+                        :snoozedUntil "2999-01-01T00:00:00.000Z")))))
+    (t3-code-dashboard--refresh)
+    ;; Expired snoozes and working threads stay active.
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   (list "active" "woke" "busy" t3-code-dashboard--snoozed-heading-id)))
+    (should (string-match-p "▸ Snoozed (1)" (buffer-string)))
+    (should (t3-code-dashboard--goto-id t3-code-dashboard--snoozed-heading-id))
+    (t3-code-dashboard-toggle-at-point)
+    (should (member "snoozed" (mapcar #'car tabulated-list-entries)))
+    (should (string-match-p "snoozed" (buffer-string)))))
+
 (ert-deftest t3-code-test-dashboard-groups-agents-below-parent-collapsed ()
   (with-temp-buffer
     (t3-code-dashboard-mode)

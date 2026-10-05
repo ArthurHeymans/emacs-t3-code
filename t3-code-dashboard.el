@@ -80,9 +80,11 @@
 (defvar-local t3-code-dashboard--omitted-other-count nil)
 (defvar-local t3-code-dashboard--omitted-project-count nil)
 (defvar-local t3-code-dashboard--settled-collapsed nil)
+(defvar-local t3-code-dashboard--snoozed-collapsed t)
 (defvar-local t3-code-dashboard--expanded-agents nil)
 
 (defconst t3-code-dashboard--settled-heading-id 't3-code-settled-heading)
+(defconst t3-code-dashboard--snoozed-heading-id 't3-code-snoozed-heading)
 (defconst t3-code-dashboard--truncated-heading-id 't3-code-truncated-heading)
 (defconst t3-code-dashboard--agents-heading-tag 't3-code-agents-heading)
 
@@ -145,9 +147,13 @@
                          'face 't3-code-dashboard-project-face))
            (t3-code-dashboard--status (plist-get thread :status))
            (concat
-            (if (eq (plist-get thread :settled) t)
-                (propertize "settled" 'face 't3-code-dashboard-settled-face)
-              (propertize "active" 'face 'success))
+            (cond ((eq (plist-get thread :settled) t)
+                   (propertize "settled" 'face 't3-code-dashboard-settled-face))
+                  ((t3-code-dashboard--snoozed-p thread)
+                   (propertize "snoozed" 'face 't3-code-dashboard-settled-face
+                               'help-echo (format "Snoozed until %s"
+                                                  (plist-get thread :snoozedUntil))))
+                  (t (propertize "active" 'face 'success)))
             (if (eq (plist-get thread :pinned) t)
                 (propertize " ^" 'face 't3-code-dashboard-project-face
                             'help-echo "Pinned")
@@ -155,11 +161,6 @@
             (if (eq (plist-get thread :unread) t)
                 (propertize " •" 'face 't3-code-dashboard-running-face
                             'help-echo "Finished since last visit")
-              "")
-            (if (plist-get thread :snoozedUntil)
-                (propertize " z" 'face 'shadow
-                            'help-echo (format "Snoozed until %s"
-                                               (plist-get thread :snoozedUntil)))
               ""))
            (propertize (concat prefix (or (plist-get thread :title) thread-id ""))
                        'face (if (> depth 0) 'font-lock-doc-face 'default))
@@ -261,20 +262,27 @@
           'help-echo "Some projects or threads are omitted")
          "" "" "" "" "" "" "")))
 
-(defun t3-code-dashboard--settled-heading-entry (count)
-  "Create the collapsible settled-section heading for COUNT rows."
-  (list t3-code-dashboard--settled-heading-id
+(defun t3-code-dashboard--section-heading-entry (id label count collapsed key)
+  "Create the heading ID of a collapsible LABEL section of COUNT rows.
+COLLAPSED tells its state and KEY the command toggling it."
+  (list id
         (vector
-         (propertize (format "%s Settled (%d)"
-                             (if t3-code-dashboard--settled-collapsed "▸" "▾")
-                             count)
+         (propertize (format "%s %s (%d)" (if collapsed "▸" "▾") label count)
                      'face 'font-lock-keyword-face
-                     'help-echo "RET or s: collapse/expand settled threads")
+                     'help-echo (format "RET or %s: collapse/expand %s threads"
+                                        key (downcase label)))
          "" "" "" "" "" "" "")))
 
+(defun t3-code-dashboard--snoozed-p (thread)
+  "Whether THREAD is snoozed until a time still to come."
+  (when-let* ((until (plist-get thread :snoozedUntil))
+              ((stringp until))
+              (time (ignore-errors (date-to-time until))))
+    (time-less-p nil time)))
+
 (defun t3-code-dashboard--entries ()
-  "Build root threads, hidden agent trees, and the bottom settled section."
-  (let ((children (make-hash-table :test #'equal)) active settled)
+  "Build root threads, hidden agent trees, then snoozed and settled sections."
+  (let ((children (make-hash-table :test #'equal)) active snoozed settled)
     (dolist (project t3-code-dashboard--projects)
       (dolist (thread (plist-get project :threads))
         (when (and (equal (plist-get thread :relationshipToParent) "subagent")
@@ -286,13 +294,17 @@
     (dolist (project t3-code-dashboard--projects)
       (dolist (thread (plist-get project :threads))
         (unless (equal (plist-get thread :relationshipToParent) "subagent")
-          (push (cons project thread)
-                (if (and (eq (plist-get thread :settled) t)
-                         (not (t3-code-dashboard--working-descendant-p thread children)))
-                    settled active)))))
+          (let ((row (cons project thread)))
+            (cond ((or (t3-code-shell-working-p thread)
+                       (t3-code-dashboard--working-descendant-p thread children))
+                   (push row active))
+                  ((eq (plist-get thread :settled) t) (push row settled))
+                  ((t3-code-dashboard--snoozed-p thread) (push row snoozed))
+                  (t (push row active)))))))
     ;; Pinned threads lead the active section, as in the web sidebar.
     (setq active (seq-sort-by (lambda (row) (if (eq (plist-get (cdr row) :pinned) t) 0 1))
                               #'< (nreverse active))
+          snoozed (nreverse snoozed)
           settled (nreverse settled))
     (append
      (when t3-code-dashboard--shell-truncated
@@ -301,13 +313,20 @@
                (t3-code-dashboard--render-thread-tree
                 (car row) (cdr row) children 0))
              active)
-     (when settled
-       (cons (t3-code-dashboard--settled-heading-entry (length settled))
-             (unless t3-code-dashboard--settled-collapsed
-               (mapcan (lambda (row)
-                         (t3-code-dashboard--render-thread-tree
-                          (car row) (cdr row) children 0))
-                       settled)))))))
+     (mapcan (lambda (section)
+               (pcase-let ((`(,id ,label ,rows ,collapsed ,key) section))
+                 (when rows
+                   (cons (t3-code-dashboard--section-heading-entry
+                          id label (length rows) collapsed key)
+                         (unless collapsed
+                           (mapcan (lambda (row)
+                                     (t3-code-dashboard--render-thread-tree
+                                      (car row) (cdr row) children 0))
+                                   rows))))))
+             (list (list t3-code-dashboard--snoozed-heading-id "Snoozed" snoozed
+                         t3-code-dashboard--snoozed-collapsed "z")
+                   (list t3-code-dashboard--settled-heading-id "Settled" settled
+                         t3-code-dashboard--settled-collapsed "s"))))))
 
 (defun t3-code-dashboard--goto-id (id)
   "Move point to the row whose stable domain ID equals ID."
@@ -367,6 +386,9 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
    ((eq id t3-code-dashboard--settled-heading-id)
     (t3-code-dashboard-toggle-settled)
     t)
+   ((eq id t3-code-dashboard--snoozed-heading-id)
+    (t3-code-dashboard-toggle-snoozed)
+    t)
    ((t3-code-dashboard--agents-heading-id-p id)
     (t3-code-dashboard-toggle-agents (cadr id))
     t)))
@@ -409,6 +431,13 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
         (not t3-code-dashboard--settled-collapsed))
   (t3-code-dashboard--refresh)
   (force-mode-line-update t))
+
+(defun t3-code-dashboard-toggle-snoozed ()
+  "Toggle visibility of snoozed threads in the current dashboard."
+  (interactive)
+  (setq t3-code-dashboard--snoozed-collapsed
+        (not t3-code-dashboard--snoozed-collapsed))
+  (t3-code-dashboard--refresh))
 
 (declare-function t3-code--reconnect "t3-code" (environment))
 
@@ -489,6 +518,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   "<tab>" #'t3-code-dashboard-toggle-at-point
   "g" #'t3-code-dashboard-reconnect
   "s" #'t3-code-dashboard-toggle-settled
+  "z" #'t3-code-dashboard-toggle-snoozed
   "N" #'t3-code-dashboard-new-thread
   "+" #'t3-code-dashboard-toggle-pin
   "v" #'t3-code-dashboard-archive
@@ -503,6 +533,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
 ;; Keep reloads useful while iterating in a live dashboard buffer: `defvar-keymap'
 ;; preserves an existing map, so explicitly install newly added bindings too.
 (keymap-set t3-code-dashboard-mode-map "TAB" #'t3-code-dashboard-toggle-at-point)
+(keymap-set t3-code-dashboard-mode-map "z" #'t3-code-dashboard-toggle-snoozed)
 (keymap-set t3-code-dashboard-mode-map "<tab>" #'t3-code-dashboard-toggle-at-point)
 
 (defun t3-code-dashboard--configure-columns ()
