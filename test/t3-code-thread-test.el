@@ -249,6 +249,30 @@
     (should-not (invisible-p (point)))
     (should (string-match-p "Folding now works" (t3-code-test--visible-text)))))
 
+(ert-deftest t3-code-test-thread-groups-work-of-a-turn-in-progress ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--payload
+          '(:thread (:id "t" :status "running" :activeRunId "r")
+            :items ((:id "u" :runId "r" :runStatus "running" :type "user_message" :text "Go")
+                    (:id "c1" :runId "r" :type "command_execution" :text "make one")
+                    (:id "t1" :runId "r" :type "reasoning" :text "Hmm")
+                    (:id "m" :runId "r" :type "assistant_message" :text "Found it.")
+                    (:id "e" :runId "r" :type "file_change" :path "a.el" :status "failed")
+                    (:id "c2" :runId "r" :type "command_execution" :text "make two")
+                    (:id "t2" :runId "r" :type "reasoning" :text "**Checking** the result"
+                     :streaming t))))
+    (t3-code-thread--refresh)
+    (let ((text (t3-code-test--visible-text)))
+      (should (string-match-p "▸ Worked · 1 tool call · 1 thought$" text))
+      (should (string-match-p "Found it\\." text))
+      ;; A failed tool call folds too, marking its group.
+      (should-not (string-match-p "a\\.el" text))
+      (should (string-match-p
+               "▸ Working · 2 tool calls · 1 thought · 1 failed · Thinking: Checking the result"
+               text))
+      (should-not (string-match-p "make" text)))))
+
 (ert-deftest t3-code-test-thread-patches-one-body-and-preserves-reading-anchors ()
   (save-window-excursion
     (with-temp-buffer
