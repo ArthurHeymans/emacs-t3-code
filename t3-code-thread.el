@@ -38,8 +38,14 @@
   :group 't3-code)
 
 (defcustom t3-code-input-window-height 0.25
-  "Height of the input window, as a fraction of the frame or in lines."
+  "Maximum height of the input window, as a fraction of the frame or in lines.
+The window grows with the draft up to this height."
   :type 'number
+  :group 't3-code)
+
+(defcustom t3-code-input-window-min-height 3
+  "Minimum height of the input window in lines, excluding its header."
+  :type 'integer
   :group 't3-code)
 
 (defcustom t3-code-input-window-display 'always
@@ -502,8 +508,9 @@ Keep the input buffer and preserve edits made while acceptance is pending."
            (with-current-buffer buffer
              (setq t3-code-compose--launch
                    (plist-put t3-code-compose--launch :modelSelection
-                              (t3-code-thread--next-effort
-                               catalog (plist-get t3-code-compose--launch :modelSelection))))
+                              (t3-code-thread--with-effort
+                               catalog (plist-get t3-code-compose--launch :modelSelection)
+                               #'t3-code-thread--next-effort)))
              (force-mode-line-update))))))))
 
 (defun t3-code-compose-manage-queue ()
@@ -649,7 +656,26 @@ The menu acts on the chat, so its window is selected first."
   "<header-line> <mouse-1>" #'t3-code-compose-select-model)
 
 (defvar-keymap t3-code-compose--effort-map
-  "<header-line> <mouse-1>" #'t3-code-compose-cycle-effort)
+  "<header-line> <mouse-1>" #'t3-code-compose-cycle-effort
+  "<header-line> <mouse-2>" #'t3-code-compose-cycle-effort)
+
+(defun t3-code-compose--model-segment (selection fallback)
+  "Return SELECTION's clickable model and reasoning effort, as in pi.
+FALLBACK names the model when SELECTION is nil."
+  (concat (propertize (if selection
+                          (format "%s/%s" (plist-get selection :instanceId)
+                                  (plist-get selection :model))
+                        fallback)
+                      'face 't3-code-model-face
+                      'mouse-face 'highlight
+                      'help-echo "mouse-1: select model"
+                      'local-map t3-code-compose--model-map)
+          (when-let* ((effort (and selection (t3-code-thread--effort-default selection))))
+            (concat " • "
+                    (propertize effort
+                                'mouse-face 'highlight
+                                'help-echo "mouse-1: cycle reasoning effort"
+                                'local-map t3-code-compose--effort-map)))))
 
 (defun t3-code-compose--launch-header ()
   "Describe the thread this input will create."
@@ -664,14 +690,7 @@ The menu acts on the chat, so its window is selected first."
                      ("existing_worktree" (abbreviate-file-name
                                            (plist-get strategy :worktreePath)))
                      (_ "project root")))
-                 (propertize (format "%s/%s"
-                                     (plist-get (plist-get launch :modelSelection) :instanceId)
-                                     (plist-get (plist-get launch :modelSelection) :model))
-                             'face 't3-code-model-face
-                             'mouse-face 'highlight 'local-map t3-code-compose--model-map)
-                 (when-let* ((effort (t3-code-thread--effort (plist-get launch :modelSelection))))
-                   (propertize effort 'mouse-face 'highlight
-                               'local-map t3-code-compose--effort-map))
+                 (t3-code-compose--model-segment (plist-get launch :modelSelection) "model")
                  (if t3-code-compose--sending "starting…" "C-c C-c start")))
      " · ")))
 
@@ -687,24 +706,12 @@ The menu acts on the chat, so its window is selected first."
         (with-current-buffer origin
           (let* ((thread (t3-code-thread--thread))
                  (selection (plist-get thread :modelSelection))
-                 (effort (t3-code-thread--effort selection))
                  (queued (length (plist-get t3-code-thread--payload :queued))))
             (string-join
              (delq nil
                    (list
-                    (concat " "
-                            (propertize (if selection
-                                            (format "%s/%s" (plist-get selection :instanceId)
-                                                    (plist-get selection :model))
-                                          (or (plist-get thread :model) "model"))
-                                        'face 't3-code-model-face
-                                        'mouse-face 'highlight
-                                        'help-echo "mouse-1: select model"
-                                        'local-map t3-code-compose--model-map))
-                    (when effort
-                      (propertize effort 'mouse-face 'highlight
-                                  'help-echo "mouse-1: cycle reasoning effort"
-                                  'local-map t3-code-compose--effort-map))
+                    (concat " " (t3-code-compose--model-segment
+                                 selection (or (plist-get thread :model) "model")))
                     (propertize t3-code-thread--phase 'face 't3-code-activity-phase-face)
                     (t3-code-thread--context-text)
                     (propertize (truncate-string-to-width
@@ -755,7 +762,38 @@ The menu acts on the chat, so its window is selected first."
   ;; Replace text-mode's spelling completion; global functions still run.
   (setq-local completion-at-point-functions
               (list #'t3-code-compose-completion-at-point t))
+  (add-hook 'after-change-functions #'t3-code-compose--refit nil t)
   (visual-line-mode 1))
+
+(defun t3-code-compose--fit-window (window)
+  "Fit input WINDOW to its draft within the configured height bounds."
+  (let ((max (if (integerp t3-code-input-window-height)
+                 t3-code-input-window-height
+               (floor (* t3-code-input-window-height (frame-height (window-frame window))))))
+        ;; Fitting heights include the header and mode lines.
+        (chrome (- (window-total-height window) (window-body-height window))))
+    (fit-window-to-buffer window (max (+ max chrome) 1)
+                          (+ t3-code-input-window-min-height chrome))))
+
+(defun t3-code-compose--refit (&rest _)
+  "Refit the windows showing this input after its draft changed."
+  (dolist (window (get-buffer-window-list nil nil t))
+    (t3-code-compose--fit-window window)))
+
+(defun t3-code-compose--prefetch-catalog (environment)
+  "Fetch ENVIRONMENT's model catalog in the background so headers show defaults."
+  (when (and environment
+             (t3-code-capability-p environment :modelSelection)
+             (eq (t3-code-environment-state environment) 'ready))
+    (let ((cache (t3-code-environment-cache environment)))
+      (unless (or (gethash "model.catalog" cache) (gethash "model.catalog/loading" cache))
+        (puthash "model.catalog/loading" t cache)
+        (t3-code-request environment "model.catalog" nil
+                         (lambda (result error)
+                           (remhash "model.catalog/loading" cache)
+                           (unless error
+                             (puthash "model.catalog" result cache)
+                             (force-mode-line-update t))))))))
 
 (defun t3-code-compose--input-window-p (window)
   "Whether WINDOW shows a T3 input buffer."
@@ -770,11 +808,15 @@ An input window already there, or selected, is reused rather than split."
                          (selected-window))
                     (and (t3-code-compose--input-window-p (window-in-direction 'below))
                          (window-in-direction 'below)))))
+    (t3-code-compose--prefetch-catalog
+     (buffer-local-value 't3-code-compose--environment buffer))
     (if window
-        (progn (set-window-buffer window buffer) (select-window window))
+        (progn (set-window-buffer window buffer)
+               (select-window window)
+               (t3-code-compose--fit-window window))
       (pop-to-buffer buffer
-                     `((display-buffer-reuse-window display-buffer-below-selected)
-                       (window-height . ,t3-code-input-window-height))))))
+                     '((display-buffer-reuse-window display-buffer-below-selected)
+                       (window-height . t3-code-compose--fit-window))))))
 
 (defun t3-code-thread-compose (&optional dispatch-mode)
   "Focus this thread's input, preselecting DISPATCH-MODE for the next send."
@@ -1129,40 +1171,61 @@ server treats them as unanswered."
        (when (buffer-live-p buffer)
          (with-current-buffer buffer (t3-code-thread--select-model catalog)))))))
 
-(defun t3-code-thread--next-effort (catalog selection)
-  "Return SELECTION with its reasoning effort advanced per CATALOG."
+(defun t3-code-thread--effort-descriptor (catalog selection)
+  "Return the reasoning effort option descriptor of SELECTION's model in CATALOG."
   (let* ((provider (seq-find (lambda (provider)
                                (equal (plist-get provider :instanceId)
                                       (plist-get selection :instanceId)))
                              (plist-get catalog :providers)))
          (model (seq-find (lambda (model) (equal (plist-get model :slug)
                                                  (plist-get selection :model)))
-                          (plist-get provider :models)))
-         (descriptor (seq-find (lambda (option)
-                                 (and (equal (plist-get option :type) "select")
-                                      (string-match-p t3-code-thread--effort-regexp
-                                                      (plist-get option :id))))
-                               (plist-get model :options)))
-         (choices (mapcar (lambda (choice) (plist-get choice :id))
-                          (plist-get descriptor :choices)))
+                          (plist-get provider :models))))
+    (seq-find (lambda (option)
+                (and (equal (plist-get option :type) "select")
+                     (string-match-p t3-code-thread--effort-regexp
+                                     (plist-get option :id))))
+              (plist-get model :options))))
+
+(defun t3-code-thread--effort-default (selection)
+  "Return the effort SELECTION uses, consulting the cached catalog.
+Without an explicit option the model's default choice applies; nil when
+neither is known."
+  (or (t3-code-thread--effort selection)
+      (when-let* ((environment (or t3-code-thread--environment t3-code-compose--environment))
+                  (catalog (gethash "model.catalog" (t3-code-environment-cache environment)))
+                  (descriptor (t3-code-thread--effort-descriptor catalog selection)))
+        (plist-get (seq-find (lambda (choice) (eq (plist-get choice :isDefault) t))
+                             (plist-get descriptor :choices))
+                   :id))))
+
+(defun t3-code-thread--with-effort (catalog selection pick)
+  "Return SELECTION with the reasoning effort chosen by PICK from CATALOG.
+PICK receives the model's levels and the current one and returns a level."
+  (let* ((descriptor (or (t3-code-thread--effort-descriptor catalog selection)
+                         (user-error "This model has no reasoning effort setting")))
          (id (plist-get descriptor :id))
-         (options (append (plist-get selection :options) nil))
-         (current (or (plist-get (seq-find (lambda (option) (equal (plist-get option :id) id))
-                                           options)
-                                 :value)
+         (levels (mapcar (lambda (choice) (plist-get choice :id))
+                         (plist-get descriptor :choices)))
+         (current (or (t3-code-thread--effort selection)
                       (plist-get (seq-find (lambda (choice) (eq (plist-get choice :isDefault) t))
                                            (plist-get descriptor :choices))
-                                 :id)))
-         (next (or (cadr (member current choices)) (car choices))))
-    (unless descriptor (user-error "This model has no reasoning effort setting"))
+                                 :id))))
     (plist-put (copy-sequence selection) :options
-               (vconcat (cons (list :id id :value next)
+               (vconcat (cons (list :id id :value (funcall pick levels current))
                               (seq-remove (lambda (option) (equal (plist-get option :id) id))
-                                          options))))))
+                                          (append (plist-get selection :options) nil)))))))
 
-(defun t3-code-thread-cycle-effort ()
-  "Cycle the reasoning effort used for subsequent turns."
-  (interactive)
+(defun t3-code-thread--next-effort (levels current)
+  "Return the level after CURRENT in LEVELS, wrapping around."
+  (or (cadr (member current levels)) (car levels)))
+
+(defun t3-code-thread--read-effort (levels current)
+  "Read one of LEVELS in the minibuffer, mentioning CURRENT."
+  (completing-read (format "Reasoning effort (current: %s): " current) levels nil t))
+
+(defun t3-code-thread--change-effort (pick)
+  "Persist the reasoning effort chosen by PICK for subsequent turns.
+See `t3-code-thread--with-effort' for PICK."
   (let ((buffer (current-buffer))
         (selection (plist-get (t3-code-thread--thread) :modelSelection)))
     (unless selection (user-error "Thread details have not loaded"))
@@ -1171,8 +1234,19 @@ server treats them as unanswered."
      (lambda (catalog)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (t3-code-thread--set-model-selection
-            (t3-code-thread--next-effort catalog selection))))))))
+           (let ((next (t3-code-thread--with-effort catalog selection pick)))
+             (unless (equal next selection)
+               (t3-code-thread--set-model-selection next)))))))))
+
+(defun t3-code-thread-cycle-effort ()
+  "Cycle the reasoning effort used for subsequent turns."
+  (interactive)
+  (t3-code-thread--change-effort #'t3-code-thread--next-effort))
+
+(defun t3-code-thread-select-effort ()
+  "Choose the reasoning effort used for subsequent turns from the minibuffer."
+  (interactive)
+  (t3-code-thread--change-effort #'t3-code-thread--read-effort))
 
 ;;;; Modes and lifecycle
 
@@ -1597,7 +1671,12 @@ trailing `&' runs the command asynchronously."
    ["Modes"
     ("M" "provider / model" t3-code-thread-select-model
      :if t3-code-thread--model-selection-supported-p)
-    ("t" "reasoning effort" t3-code-thread-cycle-effort
+    ("t" t3-code-thread-select-effort
+     :description (lambda ()
+                    (format "reasoning effort: %s"
+                            (or (t3-code-thread--effort-default
+                                 (plist-get (t3-code-thread--thread) :modelSelection))
+                                "default")))
      :if t3-code-thread--model-selection-supported-p)
     ("p" "plan / default" t3-code-thread-set-interaction-mode)
     ("P" "runtime mode" t3-code-thread-set-runtime-mode)]]

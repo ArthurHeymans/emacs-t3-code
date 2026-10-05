@@ -275,7 +275,11 @@
      ((plist-get node :setext)
       (let ((line (concat heading (if (and foldable (not open)) " …" ""))))
         (concat "\n" (propertize line 'face (plist-get node :face)) "\n"
-                (propertize (make-string (max 3 (string-width line)) ?=) 'face 'shadow)
+                ;; Share the heading's face so the rule spans its height-scaled width.
+                (propertize (make-string (max 3 (string-width line)) ?=)
+                            'face (if-let* ((face (plist-get node :face)))
+                                      (list 'shadow face)
+                                    'shadow))
                 "\n")))
      (t
       (concat (make-string (* 2 (max 0 (- depth 2))) ?\s)

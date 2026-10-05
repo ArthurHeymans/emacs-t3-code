@@ -167,7 +167,7 @@ notifications.  Opening a thread marks it seen.
 | =C-c C-k=          | both    | Abort the running turn                       |
 | =C-c C-p=          | input   | Thread menu (=?= or =.= in the chat)         |
 | =C-c C-m=          | both    | Select provider, model and options           |
-| =C-c C-t=          | both    | Cycle reasoning effort                       |
+| =C-c C-t=          | both    | Cycle reasoning effort (menu =t= picks)      |
 | =C-c C-y=          | both    | Copy the last assistant message              |
 | =C-c C-n=          | both    | New thread                                   |
 | =C-c C-r=          | both    | Resume a settled or archived thread          |
