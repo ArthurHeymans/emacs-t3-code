@@ -41,11 +41,27 @@ Add this checkout to =load-path= and connect to a local server:
             "client" "--stdio"))
 #+end_src
 
-By default =t3-code-token= is =ask=: Emacs asks for a token whenever it starts
-or restarts the bridge.  Create a pairing token with =t3 auth pairing create=;
-for a reusable bearer token set =t3-code-token-type= to =bearer=.  A string
-value is used without prompting (Customize may write it to disk), and nil
-inherits =T3_CLIENT_PAIRING_TOKEN= / =T3_CLIENT_ACCESS_TOKEN=.
+Credentials live in =auth-source=, Emacs's canonical credential store
+(=~/.authinfo.gpg= by default, or the system keyring via =auth-sources=).
+Issue a reusable bearer token on the server host:
+
+#+begin_src sh
+t3 auth session issue --label emacs --token-only
+#+end_src
+
+The first =M-x t3-code= asks for it and, once the server has accepted it,
+offers to save it as:
+
+#+begin_example
+machine 127.0.0.1 port 3773 login t3-code password BEARER-TOKEN
+#+end_example
+
+Later connections use it without asking.  A rejected stored token is
+reported; update or remove its entry and reconnect.  To be asked every time
+instead, set =t3-code-token= to =ask= (with =t3-code-token-type= =pairing=
+for one-time tokens from =t3 auth pairing create=).  A string value is used
+as is (Customize may write it to disk), and nil inherits
+=T3_CLIENT_PAIRING_TOKEN= / =T3_CLIENT_ACCESS_TOKEN=.
 =M-x t3-code-connect-prompt= connects to another URL with an explicit token.
 
 =M-x t3-code-demo= opens the ledger against the deterministic fake bridge in

@@ -297,5 +297,60 @@
              (lambda (&rest _) (ert-fail "Must reject URL before prompting for token"))))
     (should-error (t3-code-connect-prompt) :type 'user-error)))
 
+(ert-deftest t3-code-test-auth-source-credential-is-saved-after-acceptance ()
+  (let* ((netrc (make-temp-file "t3-authinfo"))
+         (auth-sources (list netrc))
+         (auth-source-save-behavior t)
+         (t3-code--pending-credential-saves (make-hash-table :test #'equal))
+         (t3-code-token 'auth-source)
+         (environment (t3-code-environment-create
+                       :id "auth" :endpoint "http://127.0.0.1:3773"))
+         (prompts 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-passwd)
+                   (lambda (&rest _) (cl-incf prompts) "issued-bearer")))
+          (auth-source-forget-all-cached)
+          (should (equal (t3-code--configured-credential environment)
+                         '(bearer . "issued-bearer")))
+          ;; Nothing is written until the server accepts the token.
+          (should (string-empty-p (with-temp-buffer (insert-file-contents netrc)
+                                                    (buffer-string))))
+          (setf (t3-code-environment-state environment) 'ready)
+          (t3-code--credential-state-changed environment)
+          (let ((saved (with-temp-buffer (insert-file-contents netrc) (buffer-string))))
+            (dolist (field '("machine 127.0.0.1" "port 3773" "login t3-code"
+                             "password issued-bearer"))
+              (should (string-match-p (regexp-quote field) saved))))
+          ;; The next connection reuses it without asking.
+          (auth-source-forget-all-cached)
+          (should (equal (t3-code--configured-credential environment)
+                         '(bearer . "issued-bearer")))
+          (should (= prompts 1)))
+      (auth-source-forget-all-cached)
+      (delete-file netrc))))
+
+(ert-deftest t3-code-test-auth-source-credential-rejected-is-not-saved ()
+  (let* ((netrc (make-temp-file "t3-authinfo"))
+         (auth-sources (list netrc))
+         (auth-source-save-behavior t)
+         (t3-code--pending-credential-saves (make-hash-table :test #'equal))
+         (t3-code-token 'auth-source)
+         (environment (t3-code-environment-create
+                       :id "auth-bad" :endpoint "http://127.0.0.1:3773")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) "wrong"))
+                  ((symbol-function 'message) #'ignore))
+          (auth-source-forget-all-cached)
+          (t3-code--configured-credential environment)
+          (setf (t3-code-environment-state environment) 'disconnected
+                (t3-code-environment-fatal-error environment)
+                '(:code "authentication-failed"))
+          (t3-code--credential-state-changed environment)
+          (should (string-empty-p (with-temp-buffer (insert-file-contents netrc)
+                                                    (buffer-string))))
+          (should (= (hash-table-count t3-code--pending-credential-saves) 0)))
+      (auth-source-forget-all-cached)
+      (delete-file netrc))))
+
 (provide 't3-code-integration-test)
 ;;; t3-code-integration-test.el ends here

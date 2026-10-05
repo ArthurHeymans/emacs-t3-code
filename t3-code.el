@@ -12,6 +12,7 @@
 
 ;;; Code:
 
+(require 'auth-source)
 (require 'url-parse)
 (require 't3-code-core)
 (require 't3-code-shell)
@@ -23,20 +24,34 @@
   :type 'string
   :group 't3-code)
 
-(defcustom t3-code-token 'ask
-  "Token to give the bridge when connecting.
-`ask' prompts securely each time a bridge is started; a string uses that
-value.  Nil inherits credentials from Emacs's process environment instead.
-A configured string can be persisted by Customize, so treat it as a secret."
-  :type '(choice (const :tag "Ask on connect" ask)
+(defcustom t3-code-token 'auth-source
+  "Where the bridge's credential comes from when it starts.
+`auth-source' (the default) looks up a bearer token for the endpoint's host
+and port in `auth-source' (by default ~/.authinfo.gpg, or the system
+keyring), with user `t3-code-auth-source-user'.  Without one it asks for a
+bearer token, issued with `t3 auth session issue --token-only', and offers
+to save it there once the server has accepted it.
+`ask' prompts each time a bridge is started, for a token of
+`t3-code-token-type'; a string uses that value (Customize may write it to
+disk).  Nil inherits credentials from Emacs's process environment."
+  :type '(choice (const :tag "auth-source (e.g. ~/.authinfo.gpg)" auth-source)
+                 (const :tag "Ask on connect" ask)
                  (string :tag "Token (stored in Emacs configuration)")
                  (const :tag "Use process environment" nil))
   :group 't3-code)
 
 (defcustom t3-code-token-type 'pairing
-  "Type of `t3-code-token': one-time pairing or reusable bearer token."
+  "Type of an asked-for or configured `t3-code-token'.
+Tokens from `auth-source' are always reusable bearer tokens."
   :type '(choice (const :tag "Pairing" pairing)
                  (const :tag "Bearer" bearer))
+  :group 't3-code)
+
+(defcustom t3-code-auth-source-user "t3-code"
+  "User name of T3 credentials in `auth-source'.
+An ~/.authinfo.gpg entry looks like:
+  machine 127.0.0.1 port 3773 login t3-code password BEARER-TOKEN"
+  :type 'string
   :group 't3-code)
 
 (defcustom t3-code-new-thread-workspace 'ask
@@ -46,20 +61,77 @@ new worktree from the current branch."
   :type '(choice (const ask) (const root) (const worktree))
   :group 't3-code)
 
-(defun t3-code--configured-credential ()
-  "Resolve the configured token for a new bridge process."
-  (when t3-code-token
-    (let ((token (if (eq t3-code-token 'ask)
-                     (read-passwd (if (eq t3-code-token-type 'bearer)
-                                      "T3 bearer token: " "T3 pairing token: "))
-                   t3-code-token)))
-      (unless (and (stringp token) (not (string-empty-p token)))
-        (user-error "T3 token cannot be empty"))
-      (cons t3-code-token-type token))))
+(defvar t3-code--pending-credential-saves (make-hash-table :test #'equal)
+  "Functions saving a new auth-source credential, by environment ID.
+They run once the server has accepted the credential.")
+
+(defun t3-code--auth-source-spec (endpoint)
+  "Return the `auth-source-search' host and port spec for ENDPOINT."
+  (let ((url (url-generic-parse-url endpoint)))
+    (list :host (url-host url)
+          :port (number-to-string (url-port url))
+          :user t3-code-auth-source-user)))
+
+(defun t3-code--auth-source-credential (environment)
+  "Return a bearer credential for ENVIRONMENT from `auth-source'.
+Ask for one when none is stored, and save it after a successful connection."
+  (let* ((spec (t3-code--auth-source-spec (t3-code-environment-endpoint environment)))
+         (found (car (apply #'auth-source-search :max 1 :require '(:secret) spec)))
+         (entry (or found
+                    (let ((auth-source-creation-prompts
+                           '((secret . "T3 bearer token for %h:%p (t3 auth session issue --token-only): "))))
+                      (car (apply #'auth-source-search :max 1 :create t spec)))))
+         (secret (plist-get entry :secret))
+         (token (if (functionp secret) (funcall secret) secret)))
+    (unless (and (stringp token) (not (string-empty-p token)))
+      (user-error "T3 token cannot be empty"))
+    (if found
+        (remhash (t3-code-environment-id environment) t3-code--pending-credential-saves)
+      (when-let* ((save (plist-get entry :save-function)))
+        (puthash (t3-code-environment-id environment) save
+                 t3-code--pending-credential-saves)))
+    (cons 'bearer token)))
+
+(defun t3-code--credential-state-changed (environment)
+  "Save a newly entered credential once ENVIRONMENT is ready.
+A rejected credential is dropped, and a rejected stored one is reported."
+  (let ((id (t3-code-environment-id environment)))
+    (pcase (t3-code-environment-state environment)
+      ('ready
+       (when-let* ((save (gethash id t3-code--pending-credential-saves)))
+         (remhash id t3-code--pending-credential-saves)
+         (funcall save)))
+      ('disconnected
+       (remhash id t3-code--pending-credential-saves)
+       (when (and (eq t3-code-token 'auth-source)
+                  (equal (plist-get (t3-code-environment-fatal-error environment) :code)
+                         "authentication-failed"))
+         (auth-source-forget-all-cached)
+         (message "T3 rejected the credential for %s; update or remove its auth-source entry (user %s)"
+                  (t3-code-environment-endpoint environment) t3-code-auth-source-user))))))
+
+(add-hook 't3-code-environment-state-hook #'t3-code--credential-state-changed)
+
+(defun t3-code--configured-credential (&optional environment)
+  "Resolve the configured credential for ENVIRONMENT's new bridge process."
+  (pcase t3-code-token
+    ('nil nil)
+    ('auth-source
+     (if environment
+         (t3-code--auth-source-credential environment)
+       (user-error "auth-source credentials need an environment")))
+    (_
+     (let ((token (if (eq t3-code-token 'ask)
+                      (read-passwd (if (eq t3-code-token-type 'bearer)
+                                       "T3 bearer token: " "T3 pairing token: "))
+                    t3-code-token)))
+       (unless (and (stringp token) (not (string-empty-p token)))
+         (user-error "T3 token cannot be empty"))
+       (cons t3-code-token-type token)))))
 
 (defun t3-code--reconnect (environment)
   "Restart ENVIRONMENT with the configured authentication setting."
-  (t3-code-restart environment (t3-code--configured-credential)))
+  (t3-code-restart environment (t3-code--configured-credential environment)))
 
 (defun t3-code--environment (&optional endpoint)
   "Return the connected environment for ENDPOINT, connecting if needed."
