@@ -22,10 +22,19 @@
   :type 'integer
   :group 't3-code)
 
-(defcustom t3-code-thinking-display 'visible
-  "Initial display of reasoning: `visible' expands it, `preview' collapses it."
+(defcustom t3-code-thinking-display 'hidden
+  "Initial display of reasoning.
+`visible' expands it, `preview' shows its first lines and `hidden' only
+its heading, as T3 Code does."
   :type '(choice (const :tag "Expanded" visible)
-                 (const :tag "Collapsed preview" preview))
+                 (const :tag "Collapsed preview" preview)
+                 (const :tag "Heading only" hidden))
+  :group 't3-code)
+
+(defcustom t3-code-fold-settled-work t
+  "Whether settled turns fold their activity behind a \"Worked\" heading.
+As in T3 Code, only the final answer, plans and failures stay visible."
+  :type 'boolean
   :group 't3-code)
 
 (defface t3-code-turn-heading-face
@@ -183,7 +192,8 @@
                           :open t :body (funcall markdown text))))
       ("reasoning"
        (append base (list :heading (concat "Thinking" (t3-code-thread--status-suffix item))
-                          :face 't3-code-thinking-face :preview t
+                          :face 't3-code-thinking-face
+                          :preview (eq t3-code-thinking-display 'preview)
                           :open (eq t3-code-thinking-display 'visible)
                           :body (funcall markdown text detail))))
       ((or "proposed_plan" "todo_list")
@@ -243,7 +253,50 @@
             (list (list :key (concat "assistant:" run-id)
                         :heading "Assistant" :setext t
                         :face 't3-code-assistant-heading-face :open t
-                        :children (mapcar #'t3-code-thread--item-node rest)))))))
+                        :children (t3-code-thread--run-children
+                                   run-id rest
+                                   (and t3-code-fold-settled-work
+                                        (member status '(nil "completed"))
+                                        (not (equal run-id (plist-get (plist-get t3-code-thread--payload :thread)
+                                                                      :activeRunId)))
+                                        (not (seq-some (lambda (item)
+                                                         (eq (plist-get item :streaming) t))
+                                                       rest))))))))))
+
+(defun t3-code-thread--work-summary (items)
+  "Describe folded work ITEMS, e.g. \"Worked · 5 tool calls · 2 thoughts\"."
+  (let* ((count (lambda (predicate) (seq-count predicate items)))
+         (type-p (lambda (&rest types)
+                   (lambda (item) (member (plist-get item :type) types))))
+         (thoughts (funcall count (funcall type-p "reasoning")))
+         (messages (funcall count (funcall type-p "assistant_message")))
+         (tools (- (length items) thoughts messages))
+         (part (lambda (n singular plural)
+                 (when (> n 0) (format "%d %s" n (if (= n 1) singular plural))))))
+    (string-join (delq nil (list "Worked"
+                                 (funcall part tools "tool call" "tool calls")
+                                 (funcall part thoughts "thought" "thoughts")
+                                 (funcall part messages "message" "messages")))
+                 " · ")))
+
+(defun t3-code-thread--run-children (run-id items fold)
+  "Return section nodes for the assistant ITEMS of RUN-ID.
+With FOLD, everything but the final answer, plans and items needing
+attention is grouped under one closed \"Worked\" section."
+  (let* ((terminal (seq-find (lambda (item) (equal (plist-get item :type) "assistant_message"))
+                             (reverse items)))
+         (visible-p (lambda (item)
+                      (or (eq item terminal)
+                          (t3-code-thread--attention-p item)
+                          (member (plist-get item :type) '("proposed_plan" "todo_list")))))
+         (work (and fold (seq-remove visible-p items))))
+    (if (null work)
+        (mapcar #'t3-code-thread--item-node items)
+      (cons (list :key (concat "work:" run-id)
+                  :heading (t3-code-thread--work-summary work)
+                  :face 't3-code-collapsed-indicator-face :open nil
+                  :children (mapcar #'t3-code-thread--item-node work))
+            (mapcar #'t3-code-thread--item-node (seq-filter visible-p items))))))
 
 (defun t3-code-thread--nodes ()
   "Build sections from loaded history and the current bounded projection."

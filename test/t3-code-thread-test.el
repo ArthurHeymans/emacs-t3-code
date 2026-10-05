@@ -33,7 +33,11 @@
       (should (= (point) position)))
     (should (string-match-p "^You$" (t3-code-test--visible-text)))
     (should (string-match-p "Please fix it" (t3-code-test--visible-text)))
-    ;; Reasoning is shown like an ordinary paragraph by default.
+    ;; Reasoning folds to its heading by default, as in T3 Code.
+    (should (string-match-p "▸ Thinking" (t3-code-test--visible-text)))
+    (should-not (string-match-p "Inspect first" (t3-code-test--visible-text)))
+    (should (t3-code-thread--goto-item "thinking"))
+    (t3-code-thread-toggle-details)
     (should (string-match-p "Inspect first" (t3-code-test--visible-text)))
     ;; Tool output collapses to a preview with a count of the hidden rest.
     (should (string-match-p "\\$ make check" (t3-code-test--visible-text)))
@@ -213,6 +217,12 @@
     (should (string-match-p "Fix the folds" (t3-code-test--visible-text)))
     (should (string-match-p "^Assistant$" (t3-code-test--visible-text)))
     (should (string-match-p "Folding now works" (t3-code-test--visible-text)))
+    ;; A settled turn folds its work, keeping the answer and the request.
+    (should (string-match-p "▸ Worked · 1 tool call" (t3-code-test--visible-text)))
+    (should-not (string-match-p "make test" (t3-code-test--visible-text)))
+    (goto-char (car (gethash "work:run-1" t3-code-thread--positions)))
+    (t3-code-thread-toggle-details)
+    (should (string-match-p "make test" (t3-code-test--visible-text)))
     (should-not (string-match-p "test output" (t3-code-test--visible-text)))
     (t3-code-thread--goto-item "tool")
     (t3-code-thread-toggle-details)

@@ -113,7 +113,10 @@ are highlighted only with major modes Emacs already associates with file
 names, and without running their mode hooks, so agent output cannot enable
 arbitrary modes.  Tool calls appear inline as =$ command=, =edit path=,
 =search …=; their output is collapsed to =t3-code-tool-preview-lines= lines.
-Reasoning is shown expanded (see =t3-code-thinking-display=).
+Reasoning is folded to its heading (see =t3-code-thinking-display=).  As in
+T3 Code, a settled turn folds its tool calls, reasoning and commentary under
+one =▸ Worked · …= heading, leaving the final answer, plans and failures
+visible (=t3-code-fold-settled-work=); =TAB= unfolds it.
 
 =RET= visits the file reference at point (=path:12:3=, =path#L12=, Markdown
 links, the path of an =edit= block) in another window, or browses a URL;
