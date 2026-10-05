@@ -80,10 +80,10 @@
                     :threads ((:id "thread" :title "Visible" :status "idle")))))))
     (should (equal (mapcar #'car tabulated-list-entries)
                    (list t3-code-dashboard--truncated-heading-id "thread")))
-    (should (string-match-p "View truncated by bridge limits" (buffer-string)))
-    (should (string-match-p "truncated" (t3-code-dashboard--header-line)))))
+    (should (string-match-p "some threads omitted by bridge limits" (buffer-string)))
+    (should (string-match-p "some threads omitted" (t3-code-dashboard--header-line)))))
 
-(ert-deftest t3-code-test-dashboard-explains-settled-only-truncation ()
+(ert-deftest t3-code-test-dashboard-counts-what-was-truncated ()
   (with-temp-buffer
     (t3-code-dashboard-mode)
     (setq t3-code-dashboard--environment
@@ -91,9 +91,10 @@
     (t3-code-dashboard--on-shell-message
      '(:kind "snapshot" :payload
        (:truncated t :omittedSettledCount 37 :omittedOtherCount 0
-        :omittedProjectCount 0 :projects ())))
-    (should (string-match-p "37 older settled threads omitted" (buffer-string)))
-    (should (string-match-p "37 older settled omitted"
+        :omittedProjectCount 2 :projects ())))
+    (should (string-match-p "2 projects and 37 settled threads omitted by bridge limits"
+                            (buffer-string)))
+    (should (string-match-p "2 projects and 37 settled threads omitted"
                             (t3-code-dashboard--header-line)))))
 
 (ert-deftest t3-code-test-dashboard-shows-settled-threads-by-default ()

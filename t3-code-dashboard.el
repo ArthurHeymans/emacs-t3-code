@@ -109,10 +109,7 @@
                           'face 't3-code-dashboard-settled-face)
               (if t3-code-dashboard--shell-truncated
                   (propertize
-                   (if (t3-code-dashboard--settled-only-omission-p)
-                       (format "  ⚠ %d older settled omitted"
-                               t3-code-dashboard--omitted-settled-count)
-                     "  ⚠ truncated")
+                   (format "  ⚠ %s omitted" (t3-code-dashboard--omission-text))
                    'face 'warning)
                 "")
               (when (eq state 'disconnected)
@@ -241,22 +238,25 @@
                      project child children (1+ depth)))
                   direct)))))))
 
-(defun t3-code-dashboard--settled-only-omission-p ()
-  "Whether the bridge omitted only old settled threads."
-  (and (integerp t3-code-dashboard--omitted-settled-count)
-       (> t3-code-dashboard--omitted-settled-count 0)
-       (equal t3-code-dashboard--omitted-other-count 0)
-       (equal t3-code-dashboard--omitted-project-count 0)))
+(defun t3-code-dashboard--omission-text ()
+  "Describe what the bridge omitted, e.g. \"2 projects and 1 settled thread\"."
+  (let* ((part (lambda (n singular plural)
+                 (when (and (integerp n) (> n 0))
+                   (format "%d %s" n (if (= n 1) singular plural)))))
+         (parts (delq nil (list (funcall part t3-code-dashboard--omitted-project-count
+                                         "project" "projects")
+                                (funcall part t3-code-dashboard--omitted-settled-count
+                                         "settled thread" "settled threads")
+                                (funcall part t3-code-dashboard--omitted-other-count
+                                         "active thread" "active threads")))))
+    (if parts (string-join parts " and ") "some threads")))
 
 (defun t3-code-dashboard--truncated-heading-entry ()
   "Create a warning row for a bounded shell projection."
   (list t3-code-dashboard--truncated-heading-id
         (vector
          (propertize
-          (if (t3-code-dashboard--settled-only-omission-p)
-              (format "⚠ %d older settled threads omitted by bridge limits"
-                      t3-code-dashboard--omitted-settled-count)
-            "⚠ View truncated by bridge limits")
+          (format "⚠ %s omitted by bridge limits" (t3-code-dashboard--omission-text))
           'face 'warning
           'help-echo "Some projects or threads are omitted")
          "" "" "" "" "" "" "")))
