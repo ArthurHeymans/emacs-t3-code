@@ -495,11 +495,10 @@ Keep the input buffer and preserve edits made while acceptance is pending."
       (t3-code-compose--select-launch-model)
     (t3-code-compose--in-chat (t3-code-thread-select-model))))
 
-(defun t3-code-compose-cycle-effort ()
-  "Cycle the reasoning effort of the next turn, or of the thread to create."
-  (interactive)
+(defun t3-code-compose--change-effort (pick)
+  "Change reasoning effort for this input using PICK to choose a level."
   (if (not t3-code-compose--launch)
-      (t3-code-compose--in-chat (t3-code-thread-cycle-effort))
+      (t3-code-compose--in-chat (t3-code-thread--change-effort pick))
     (let ((buffer (current-buffer)))
       (t3-code-thread--with-catalog
        t3-code-compose--environment
@@ -510,8 +509,43 @@ Keep the input buffer and preserve edits made while acceptance is pending."
                    (plist-put t3-code-compose--launch :modelSelection
                               (t3-code-thread--with-effort
                                catalog (plist-get t3-code-compose--launch :modelSelection)
-                               #'t3-code-thread--next-effort)))
+                               pick)))
              (force-mode-line-update))))))))
+
+(defun t3-code-compose-cycle-effort ()
+  "Cycle the reasoning effort of the next turn, or of the thread to create."
+  (interactive)
+  (t3-code-compose--change-effort #'t3-code-thread--next-effort))
+
+(defun t3-code-compose-select-effort ()
+  "Choose reasoning effort for the next turn, or for the thread to create."
+  (interactive)
+  (t3-code-compose--change-effort #'t3-code-thread--read-effort))
+
+(defun t3-code-compose-set-runtime-mode ()
+  "Choose the runtime mode for this input's thread."
+  (interactive)
+  (if (not t3-code-compose--launch)
+      (t3-code-compose--in-chat (t3-code-thread-set-runtime-mode))
+    (let ((mode (completing-read
+                 "Runtime mode: "
+                 '("full-access" "auto" "auto-accept-edits" "approval-required")
+                 nil t nil nil (plist-get t3-code-compose--launch :runtimeMode))))
+      (setq t3-code-compose--launch
+            (plist-put t3-code-compose--launch :runtimeMode mode))
+      (force-mode-line-update))))
+
+(defun t3-code-compose-set-interaction-mode ()
+  "Choose default or plan mode for this input's thread."
+  (interactive)
+  (if (not t3-code-compose--launch)
+      (t3-code-compose--in-chat (t3-code-thread-set-interaction-mode))
+    (let ((mode (completing-read
+                 "Interaction mode: " '("default" "plan") nil t nil nil
+                 (plist-get t3-code-compose--launch :interactionMode))))
+      (setq t3-code-compose--launch
+            (plist-put t3-code-compose--launch :interactionMode mode))
+      (force-mode-line-update))))
 
 (defun t3-code-compose-manage-queue ()
   "Manage this thread's queued messages, as in pi."
@@ -519,13 +553,15 @@ Keep the input buffer and preserve edits made while acceptance is pending."
   (t3-code-compose--in-chat (t3-code-thread-manage-queue)))
 
 (defun t3-code-compose-actions ()
-  "Open the thread menu from the input buffer.
-The menu acts on the chat, so its window is selected first."
+  "Open the menu for this input's existing or new thread.
+For an existing thread, select the chat window before opening its menu."
   (interactive)
-  (let ((chat (t3-code-compose--chat-buffer)))
-    (unless chat (user-error "This input is not attached to an open thread"))
-    (select-window (or (get-buffer-window chat) (display-buffer chat)))
-    (call-interactively #'t3-code-thread-actions)))
+  (if t3-code-compose--launch
+      (call-interactively #'t3-code-compose-launch-actions)
+    (let ((chat (t3-code-compose--chat-buffer)))
+      (unless chat (user-error "This input is not attached to an open thread"))
+      (select-window (or (get-buffer-window chat) (display-buffer chat)))
+      (call-interactively #'t3-code-thread-actions))))
 
 (defun t3-code-compose-copy-last ()
   "Copy the last assistant message of this thread."
@@ -690,6 +726,8 @@ FALLBACK names the model when SELECTION is nil."
                                            (plist-get strategy :worktreePath)))
                      (_ "project root")))
                  (t3-code-compose--model-segment (plist-get launch :modelSelection) "model")
+                 (plist-get launch :runtimeMode)
+                 (when (equal (plist-get launch :interactionMode) "plan") "plan")
                  (if t3-code-compose--sending "starting…" "C-c C-c start")))
      " · ")))
 
@@ -1709,6 +1747,32 @@ trailing `&' runs the command asynchronously."
 (defun t3-code-thread--lifecycle-p ()
   "Whether the bridge supports thread lifecycle commands."
   (t3-code-capability-p t3-code-thread--environment :threadLifecycle))
+
+(defun t3-code-compose--model-selection-supported-p ()
+  "Whether this input's bridge advertises model selection."
+  (t3-code-capability-p t3-code-compose--environment :modelSelection))
+
+(transient-define-prefix t3-code-compose-launch-actions ()
+  "Settings and actions for a new-thread draft."
+  [["Threads"
+    ("n" "new" t3-code-new-thread)
+    ("r" "resume" t3-code-resume)
+    ("j" "switch" t3-code-switch-thread)
+    ("b" "ledger" t3-code-ledger)]
+   ["Message"
+    ("m" "start thread" t3-code-compose-send)]
+   ["Modes"
+    ("M" "provider / model" t3-code-compose-select-model
+     :if t3-code-compose--model-selection-supported-p)
+    ("t" t3-code-compose-select-effort
+     :description (lambda ()
+                    (format "reasoning effort: %s"
+                            (or (t3-code-thread--effort-default
+                                 (plist-get t3-code-compose--launch :modelSelection))
+                                "default")))
+     :if t3-code-compose--model-selection-supported-p)
+    ("p" "plan / default" t3-code-compose-set-interaction-mode)
+    ("P" "runtime mode" t3-code-compose-set-runtime-mode)]])
 
 (transient-define-prefix t3-code-thread-actions ()
   "Actions for the current T3 thread."

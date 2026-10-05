@@ -172,7 +172,8 @@ bridge).
 =C-c C-n= starts a thread: it asks where to work (project root, a new
 worktree from a base ref, or an existing worktree) and opens an input whose
 first =C-c C-c= launches the thread.  It inherits the current thread's model
-and modes; =C-u C-c C-n= picks the project and model.
+and modes; =C-u C-c C-n= picks the project and model.  Before launching,
+=C-c C-p= opens the draft menu to change the model, reasoning effort or modes.
 
 =f= in the chat forks the conversation at the turn at point (=C-u f= from
 the latest point) and opens the fork.
@@ -189,7 +190,7 @@ notifications.  Opening a thread marks it seen.
 | =C-c C-s=          | input   | Steer the running turn                       |
 | =C-c C-q=          | input   | Manage queued messages                       |
 | =C-c C-k=          | both    | Abort the running turn                       |
-| =C-c C-p=          | input   | Thread menu (=?= or =.= in the chat)         |
+| =C-c C-p=          | input   | Thread / draft menu (=?= or =.= in chat)     |
 | =C-c C-m=          | both    | Select provider, model and options           |
 | =C-c C-t=          | both    | Cycle reasoning effort (menu =t= picks)      |
 | =C-c C-y=          | both    | Copy the last assistant message              |

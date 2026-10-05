@@ -89,6 +89,32 @@
       (should (eq (plist-get (cdr suffix) :command)
                   #'t3-code-thread-compose-queue)))))
 
+(ert-deftest t3-code-test-composer-menu-targets-new-draft-or-existing-chat ()
+  (save-window-excursion
+    (with-temp-buffer
+      (t3-code-thread-mode)
+      (let ((chat (current-buffer)) menu-buffer menu)
+        (with-temp-buffer
+          (t3-code-compose-mode)
+          (switch-to-buffer (current-buffer))
+          (insert "Unsent draft")
+          (setq t3-code-compose--launch '(:projectId "project-1"))
+          (cl-letf (((symbol-function 'transient-setup)
+                     (lambda (prefix &rest _)
+                       (setq menu prefix menu-buffer (current-buffer)))))
+            (call-interactively
+             (lookup-key t3-code-compose-mode-map (kbd "C-c C-p")))
+            (should (eq menu 't3-code-compose-launch-actions))
+            (should (eq menu-buffer (current-buffer)))
+            (should (eq (window-buffer (selected-window)) (current-buffer)))
+            (should (equal (buffer-string) "Unsent draft"))
+            (setq t3-code-compose--launch nil
+                  t3-code-compose--origin-buffer chat)
+            (t3-code-compose-actions)
+            (should (eq menu 't3-code-thread-actions))
+            (should (eq menu-buffer chat))
+            (should (eq (window-buffer (selected-window)) chat))))))))
+
 (ert-deftest t3-code-test-thread-select-model-preserves-draft-and-sends-options ()
   (with-temp-buffer
     (t3-code-thread-mode)
@@ -602,6 +628,20 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
             (insert "Build the resolver")
             (should (string-match-p "New thread.*owner/repo.*project root"
                                     (t3-code-compose--header-line)))
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (prompt &rest _)
+                         (if (string-prefix-p "Runtime" prompt)
+                             "approval-required"
+                           "plan"))))
+              (call-interactively
+               (plist-get (cdr (transient-get-suffix 't3-code-compose-launch-actions "p"))
+                          :command))
+              (call-interactively
+               (plist-get (cdr (transient-get-suffix 't3-code-compose-launch-actions "P"))
+                          :command)))
+            (should (equal (buffer-string) "Build the resolver"))
+            (should (string-match-p "approval-required.*plan"
+                                    (t3-code-compose--header-line)))
             (cl-letf (((symbol-function 't3-code-request)
                        (lambda (_environment operation input callback)
                          (setq request (list operation input))
@@ -616,6 +656,8 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
             (should (equal (car request) "thread.create"))
             (should (equal (plist-get (cadr request) :text) "Build the resolver"))
             (should (equal (plist-get (cadr request) :projectId) "project-1"))
+            (should (equal (plist-get (cadr request) :runtimeMode) "approval-required"))
+            (should (equal (plist-get (cadr request) :interactionMode) "plan"))
             (should (equal (plist-get (cadr request) :workspaceStrategy) '(:type "root")))
             (should-not (plist-member (cadr request) :projectName))
             (should (equal (plist-get opened :id) "thread-new"))
