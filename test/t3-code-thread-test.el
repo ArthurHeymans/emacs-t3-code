@@ -625,6 +625,48 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
                            "https://new.example/"))
             (should-not (string-search "example.com/docs" (buffer-string)))))))))
 
+(ert-deftest t3-code-test-linkify-unmatched-brackets ()
+  ;; This used to retry the remaining line at each `[' (seconds per row).
+  (let* ((text (concat (make-string 40000 ?\[)
+                       " [docs](https://docs.example)\nhttps://plain.example"))
+         (linked (t3-code-markdown-linkify text)))
+    (should (equal text linked))
+    (should (equal (get-text-property (string-search "docs]" linked)
+                                      't3-code-url linked)
+                   "https://docs.example"))
+    (should (equal (get-text-property (string-search "https://plain" linked)
+                                      't3-code-url linked)
+                   "https://plain.example"))))
+
+(ert-deftest t3-code-test-linkify-bounds-work-on-large-output ()
+  (let ((t3-code-markdown-max-chars 20)
+        (text (propertize "https://example.com/large-tool-output" 'face 'bold)))
+    (cl-letf (((symbol-function 't3-code-markdown--url-bounds)
+               (lambda () (ert-fail "Oversized output must not be scanned"))))
+      (should (eq (t3-code-markdown-linkify text) text)))))
+
+(ert-deftest t3-code-test-thread-reuses-links-only-for-unchanged-rows ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (let ((inhibit-read-only t)
+          (linkify (symbol-function 't3-code-markdown-linkify))
+          (calls 0)
+          (text "[docs](https://example.com)"))
+      (cl-letf (((symbol-function 't3-code-markdown-linkify)
+                 (lambda (text)
+                   (cl-incf calls)
+                   (funcall linkify text))))
+        (dotimes (_ 2)
+          (t3-code-thread--sync-rows (list (list :key "body" :text text))))
+        (should (= calls 1))
+        (should (equal (get-text-property 2 't3-code-url) "https://example.com"))
+        ;; Faces/hidden markup changing still invalidate the reused text.
+        (t3-code-thread--sync-rows
+         (list (list :key "body" :text (propertize text 'face 'bold))))
+        (should (= calls 2))
+        (should (eq (get-text-property 2 'face) 'bold))
+        (should (equal (get-text-property 2 't3-code-url) "https://example.com"))))))
+
 (ert-deftest t3-code-test-compose-path-completion-matches-pi ()
   (let ((root (make-temp-file "t3-complete" t)))
     (unwind-protect

@@ -35,7 +35,7 @@ a specific mode; nil shows plain text."
   "Invisibility symbols the supported Markdown modes put on their markup.")
 
 (defcustom t3-code-markdown-max-chars 60000
-  "Bodies longer than this are shown without fontification."
+  "Bodies longer than this are shown without fontification or linkification."
   :type 'integer
   :group 't3-code)
 
@@ -178,19 +178,28 @@ Unavailable modes, oversized text and fontification errors yield TEXT."
   (save-restriction
     ;; Keep the opening delimiter for thingatpt's punctuation handling.
     (narrow-to-region (max (point-min) (1- (point))) (line-end-position))
-    (bounds-of-thing-at-point 'url)))
+    ;; We already found an HTTP(S) prefix.  Avoid rebuilding thingatpt's
+    ;; regexp for every URI scheme, or searching the rest of the line for
+    ;; unrelated <URL:...> markup, for each link in tool output.
+    (let ((thing-at-point-beginning-of-url-regexp "https?://")
+          (thing-at-point-markedup-url-regexp nil))
+      (bounds-of-thing-at-point 'url))))
 
 (defun t3-code-markdown-linkify (text)
   "Return a copy of TEXT with clickable HTTP(S) URLs and Markdown labels.
 Preserve faces and hidden markup.  Only our own interaction properties
-are added, never keymaps copied from a fontification mode."
-  (if (not (string-match-p "https?://" text))
+are added, never keymaps copied from a fontification mode.
+Rows longer than `t3-code-markdown-max-chars' are left unchanged."
+  (if (or (> (length text) t3-code-markdown-max-chars)
+          (not (string-match-p "https?://" text)))
       text
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
       ;; Like pi, highlight the visible label rather than just its hidden URL.
-      (while (re-search-forward "\\[\\([^]\n]+\\)\\](<?\\(https?://\\)" nil t)
+      ;; Exclude opening brackets too: otherwise a line of unmatched `['
+      ;; retries the whole remaining suffix at every bracket (quadratic).
+      (while (re-search-forward "\\[\\([^][\n]+\\)\\](<?\\(https?://\\)" nil t)
         (let* ((start (match-beginning 1))
                (end (match-end 1))
                (url (save-excursion

@@ -527,7 +527,8 @@ group names its latest activity."
   (let ((old t3-code-thread--rows)
         (positions (make-hash-table :test #'equal)))
     (goto-char (point-min))
-    (dolist (row rows)
+    (cl-loop for cell on rows
+             for row = (car cell) do
       (let* ((key (plist-get row :key))
              (match (seq-position old key (lambda (candidate wanted)
                                            (equal (plist-get candidate :key) wanted)))))
@@ -535,22 +536,32 @@ group names its latest activity."
           (dotimes (_ match)
             (delete-region (point) (+ (point) (length (plist-get (pop old) :text))))))
         (let* ((start (point))
-               (text (t3-code-markdown-linkify (plist-get row :text)))
+               (raw-text (plist-get row :text))
+               (previous (and old (equal key (plist-get (car old) :key))
+                              (pop old)))
+               ;; Reuse interaction properties for unchanged rows; streamed
+               ;; updates must not rescan every earlier message and tool output.
+               (text (if (and previous
+                              (equal-including-properties
+                               raw-text (plist-get previous :raw-text)))
+                         (plist-get previous :text)
+                       (t3-code-markdown-linkify raw-text)))
                (item-id (or (plist-get row :item-id)
                             (plist-get (plist-get row :node) :item-id))))
-          (setf (plist-get row :text) text)
-          (if (and old (equal key (plist-get (car old) :key)))
-              (let ((previous (pop old)))
-                (if (equal-including-properties text (plist-get previous :text))
-                    (forward-char (length text))
-                  (delete-region start (+ start (length (plist-get previous :text))))
-                  (insert text)))
+          (setf (plist-get row :raw-text) raw-text
+                (plist-get row :text) text)
+          (if previous
+              (if (equal-including-properties text (plist-get previous :text))
+                  (forward-char (length text))
+                (delete-region start (+ start (length (plist-get previous :text))))
+                (insert text))
             (insert text))
           (add-text-properties start (point)
                                (list 't3-code-row-key key
                                      't3-code-thread-item-id item-id
                                      'rear-nonsticky t))
-          (puthash key (cons start (point)) positions))))
+          (puthash key (cons start (point)) positions)
+          (setcar cell row))))
     (delete-region (point) (point-max))
     (setq t3-code-thread--rows rows
           t3-code-thread--positions positions)))
