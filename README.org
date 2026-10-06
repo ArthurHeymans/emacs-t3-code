@@ -111,7 +111,11 @@ spell checking as usual.  =TAB= / =completion-at-point= completes:
 - =/command= at the start of the message: the provider's slash commands
 - =$skill= anywhere: the provider's skills
 - =@path=: project files found by the server
-- =./=, =../=, =~/= and absolute paths: local files
+- =./=, =../=, =~/= and absolute paths: files in the thread's worktree
+  (through TRAMP for a remote server), with directory/file annotations as in pi
+
+Paths also complete inside quotes or backticks; their typed prefix is retained.
+A slash at the very start of the message is reserved for provider commands.
 
 =M-p= / =M-n= (also =C-<up>= / =C-<down>=) recall sent prompts, =C-r= picks
 one with completion, and =M-<next>= / =M-<prior>= scroll the chat without
@@ -137,6 +141,9 @@ tool calls fold too, counted in the heading), and a turn in progress
 folds each stretch of activity between its messages, the latest one reading
 e.g. =▸ Working · 4 tool calls · 1 thought · $ make check=.  =TAB= unfolds a
 group.
+
+HTTP(S) URLs and Markdown web-link labels highlight on hover and open in
+Emacs's configured browser with =mouse-1= or =mouse-2=, as well as =RET=.
 
 =RET= visits the file reference at point (=path:12:3=, =path#L12=, Markdown
 links, the path of an =edit= block) in another window, or browses a URL;

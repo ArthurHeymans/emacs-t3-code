@@ -12,6 +12,8 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'thingatpt)
+(require 'browse-url)
 
 (defcustom t3-code-markdown-mode 'auto
   "Major mode used to fontify Markdown in transcripts.
@@ -147,6 +149,68 @@ Unavailable modes, oversized text and fontification errors yield TEXT."
               (when (> (hash-table-count t3-code-markdown--cache) 2000)
                 (clrhash t3-code-markdown--cache))
               (puthash key result t3-code-markdown--cache)))))))
+
+(defvar-keymap t3-code-markdown--url-map
+  "<mouse-1>" #'t3-code-markdown-browse-url
+  "<mouse-2>" #'t3-code-markdown-browse-url)
+
+(defun t3-code-markdown-browse-url (event)
+  "Open the web link at the mouse position in EVENT."
+  (interactive "e")
+  (let* ((position (event-start event))
+         (window (posn-window position))
+         (point (posn-point position)))
+    (when (and (window-live-p window) (integer-or-marker-p point))
+      (with-selected-window window
+        (goto-char point)
+        (when-let* ((url (get-text-property point 't3-code-url)))
+          (browse-url url))))))
+
+(defun t3-code-markdown--mark-url (start end url)
+  "Make START..END a clickable web link to URL in the current buffer."
+  (add-text-properties start end
+                       (list 't3-code-url url
+                             'mouse-face 'highlight 'help-echo url
+                             'follow-link t 'keymap t3-code-markdown--url-map)))
+
+(defun t3-code-markdown--url-bounds ()
+  "Return URL bounds at point without confusing an earlier URL on the line."
+  (save-restriction
+    ;; Keep the opening delimiter for thingatpt's punctuation handling.
+    (narrow-to-region (max (point-min) (1- (point))) (line-end-position))
+    (bounds-of-thing-at-point 'url)))
+
+(defun t3-code-markdown-linkify (text)
+  "Return a copy of TEXT with clickable HTTP(S) URLs and Markdown labels.
+Preserve faces and hidden markup.  Only our own interaction properties
+are added, never keymaps copied from a fontification mode."
+  (if (not (string-match-p "https?://" text))
+      text
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      ;; Like pi, highlight the visible label rather than just its hidden URL.
+      (while (re-search-forward "\\[\\([^]\n]+\\)\\](<?\\(https?://\\)" nil t)
+        (let* ((start (match-beginning 1))
+               (end (match-end 1))
+               (url (save-excursion
+                      (goto-char (match-beginning 2))
+                      (when-let* ((bounds (t3-code-markdown--url-bounds)))
+                        (buffer-substring-no-properties (car bounds) (cdr bounds))))))
+          (when url (t3-code-markdown--mark-url start end url))))
+      (goto-char (point-min))
+      (while (re-search-forward "https?://" nil t)
+        (let ((bounds (save-excursion
+                        (goto-char (match-beginning 0))
+                        (t3-code-markdown--url-bounds))))
+          (when bounds
+            ;; A URL-shaped label still belongs to its Markdown destination.
+            (unless (get-text-property (car bounds) 't3-code-url)
+              (t3-code-markdown--mark-url
+               (car bounds) (cdr bounds)
+               (buffer-substring-no-properties (car bounds) (cdr bounds))))
+            (goto-char (cdr bounds)))))
+      (buffer-string))))
 
 (provide 't3-code-markdown)
 ;;; t3-code-markdown.el ends here

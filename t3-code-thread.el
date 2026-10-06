@@ -633,6 +633,50 @@ For an existing thread, select the chat window before opening its menu."
                                              (list :cwd directory :query query :limit 50))
                        :entries))))
 
+(defun t3-code-compose--path-completions (path)
+  "Return candidates for PATH relative to the input's worktree.
+Keep the typed prefix, omit dot entries, and use the worktree's TRAMP
+route for server paths without inserting that route into the message."
+  (unless (file-remote-p path)
+    (condition-case nil
+        (let* ((dir (file-name-directory path))
+               (base (file-name-nondirectory path))
+               (localname (file-remote-p default-directory 'localname))
+               ;; file-remote-p and generic TRAMP string operations can collapse
+               ;; a multi-hop route to its last hop.  Preserve the original text.
+               (prefix (and localname
+                            (substring default-directory 0
+                                       (- (length default-directory) (length localname)))))
+               (directory
+                (if prefix
+                    (let ((file-name-handler-alist nil))
+                      (file-name-as-directory
+                       (concat prefix (if (string-prefix-p "~/" dir)
+                                          dir
+                                        (expand-file-name dir localname)))))
+                  (file-name-as-directory (expand-file-name dir default-directory)))))
+          (when (file-directory-p directory)
+            (mapcar (lambda (name) (concat dir name))
+                    (seq-remove (lambda (name) (member name '("." ".." "./" "../")))
+                                (file-name-all-completions base directory)))))
+      (error nil))))
+
+(defun t3-code-compose--path-capf ()
+  "Complete ./, ../, ~/ and absolute paths, as in pi's input buffer.
+Reserve a leading slash at buffer start for provider commands."
+  (when-let* ((bounds (bounds-of-thing-at-point 'filename))
+              (start (car bounds))
+              (end (cdr bounds))
+              (path (buffer-substring-no-properties start end))
+              ((string-match-p "\\`\\(?:\\.\\.?/\\|~/\\|/\\)" path))
+              ((not (and (string-prefix-p "/" path) (= start (point-min)))))
+              (candidates (t3-code-compose--path-completions path)))
+    (list start end candidates
+          :exclusive 'no
+          :annotation-function
+          (lambda (candidate)
+            (if (string-suffix-p "/" candidate) " (dir)" " (file)")))))
+
 (defun t3-code-compose-completion-at-point ()
   "Complete /commands, $skills, @files and ./paths in the input buffer."
   (let* ((end (point))
@@ -670,20 +714,16 @@ For an existing thread, select the chat window before opening its menu."
                 (if (eq action 'metadata)
                     '(metadata (category . t3-code-file))
                   (funcall table string predicate action))))))
-     ;; Paths come from the user's draft, but a remote file name would still
-     ;; open a TRAMP connection just for completion.
-     ((and (string-match-p "\\`\\(?:\\.\\.?/\\|~/\\|/.\\)" token)
-           (not (file-remote-p token)))
-      ;; Relative to the input's `default-directory', the thread worktree.
-      (list start end #'completion-file-name-table)))))
+     (t (t3-code-compose--path-capf)))))
 
 (add-to-list 'completion-category-defaults '(t3-code-file (styles substring basic)))
 
 (defun t3-code-compose-complete ()
   "Complete a command, skill, file or path at point, or indent."
   (interactive)
-  (unless (completion-at-point)
-    (indent-for-tab-command)))
+  (let ((completion-show-help nil))
+    (unless (completion-at-point)
+      (indent-for-tab-command))))
 
 ;;;; Input header
 
@@ -771,6 +811,7 @@ FALLBACK names the model when SELECTION is nil."
 (defvar-keymap t3-code-compose-mode-map
   :parent text-mode-map
   "TAB" #'t3-code-compose-complete
+  "<tab>" #'t3-code-compose-complete
   "C-c C-c" #'t3-code-compose-send
   "C-c C-s" #'t3-code-compose-steer
   "C-c C-q" #'t3-code-compose-manage-queue
@@ -796,9 +837,9 @@ FALLBACK names the model when SELECTION is nil."
 \\{t3-code-compose-mode-map}"
   (setq header-line-format
         '(:eval (t3-code-thread--escape-header (t3-code-compose--header-line))))
-  ;; Replace text-mode's spelling completion; global functions still run.
+  ;; As in pi, offer only our completions, not dictionary words from text-mode.
   (setq-local completion-at-point-functions
-              (list #'t3-code-compose-completion-at-point t))
+              (list #'t3-code-compose-completion-at-point))
   (add-hook 'after-change-functions #'t3-code-compose--refit nil t)
   ;; Input buffers are hidden by a leading space, which disables undo.
   (buffer-enable-undo)
@@ -1652,8 +1693,10 @@ pick which host a TRAMP connection goes to."
   "Visit the URL or file reference at point; return non-nil when one exists.
 With prefix argument INVERT, invert `t3-code-visit-file-other-window'."
   (interactive "P")
-  (let ((link (t3-code-thread--markdown-link-at-point)))
+  (let ((link (t3-code-thread--markdown-link-at-point))
+        (url (get-text-property (point) 't3-code-url)))
     (cond
+     (url (browse-url url) t)
      ((and link (string-match-p "\\`https?://" link)) (browse-url link) t)
      ((thing-at-point 'url t) (browse-url (thing-at-point 'url t)) t)
      ((when-let* ((target (t3-code-thread--file-target-at-point)))
