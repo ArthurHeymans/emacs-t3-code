@@ -1178,10 +1178,11 @@ server treats them as unanswered."
   (let* ((choices (cl-loop for provider in (plist-get catalog :providers)
                            append (cl-loop for model in (plist-get provider :models)
                                            collect (cons
-                                                    (format "%s · %s [%s]%s"
+                                                    (format "%s · %s [%s · %s]%s"
                                                             (plist-get provider :name)
                                                             (plist-get model :name)
                                                             (plist-get provider :instanceId)
+                                                            (plist-get model :slug)
                                                             (if (eq (plist-get provider :available) t)
                                                                 ""
                                                               " (unavailable)"))

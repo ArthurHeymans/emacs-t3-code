@@ -115,6 +115,45 @@
             (should (eq menu-buffer chat))
             (should (eq (window-buffer (selected-window)) chat))))))))
 
+(ert-deftest t3-code-test-launch-menu-selects-distinct-pi-model-routes ()
+  (save-window-excursion
+    (with-temp-buffer
+      (t3-code-compose-mode)
+      (switch-to-buffer (current-buffer))
+      (setq t3-code-compose--environment
+            (t3-code-environment-create
+             :id "launch" :state 'ready :capabilities '(:modelSelection t))
+            t3-code-compose--launch '(:projectId "project-1"))
+      (insert "Unsent draft")
+      (let ((catalog '(:providers ((:instanceId "pi" :name "Pi" :available t
+                                    :models ((:slug "openai/gpt-5.4" :name "GPT-5.4")
+                                             (:slug "openai-codex/gpt-5.4" :name "GPT-5.4"))))))
+            (selection '(:instanceId "pi" :model "openai-codex/gpt-5.4")))
+        (puthash "model.catalog" catalog
+                 (t3-code-environment-cache t3-code-compose--environment))
+        ;; Exercise actual Transient setup, not just the dispatch wrapper.
+        (require 't3-code)
+        (unwind-protect
+            (progn
+              (call-interactively
+               (lookup-key t3-code-compose-mode-map (kbd "C-c C-p")))
+              (let ((command (lookup-key transient--transient-map (kbd "M"))))
+                (should (eq command #'t3-code-compose-select-model))
+                (cl-letf (((symbol-function 'completing-read)
+                           (lambda (_prompt choices &rest _)
+                             (should (= (length (delete-dups (mapcar #'car choices))) 2))
+                             (should (assoc "Pi · GPT-5.4 [pi · openai/gpt-5.4]" choices))
+                             "Pi · GPT-5.4 [pi · openai-codex/gpt-5.4]")))
+                  (call-interactively command)))
+              (should (equal (plist-get t3-code-compose--launch :modelSelection) selection))
+              (cl-letf (((symbol-function 't3-code-request)
+                         (lambda (_environment operation input _callback)
+                           (should (equal operation "thread.create"))
+                           (should (equal (plist-get input :modelSelection) selection)))))
+                (t3-code-compose--launch-thread "Start"))
+              (should (equal (buffer-string) "Unsent draft")))
+          (transient-quit-all))))))
+
 (ert-deftest t3-code-test-thread-select-model-preserves-draft-and-sends-options ()
   (with-temp-buffer
     (t3-code-thread-mode)
@@ -132,7 +171,7 @@
                                                        :type "select"
                                                        :choices ((:id "high" :isDefault t)
                                                                  (:id "low"))))))))))
-          (answers '("Work · New [work]" "low")) request)
+          (answers '("Work · New [work · new]" "low")) request)
       (with-temp-buffer
         (t3-code-compose-mode)
         (setq t3-code-compose--origin-buffer origin)
@@ -162,7 +201,7 @@
     (setq t3-code-thread--payload
           '(:thread (:modelSelection (:instanceId "work" :model "old")
                      :hasStartedSession t)))
-    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work · New [work]")))
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work · New [work · new]")))
       (should-error
        (t3-code-thread--select-model
         '(:providers ((:instanceId "work" :name "Work" :available t
