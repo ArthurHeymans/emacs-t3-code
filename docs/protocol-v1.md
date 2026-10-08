@@ -146,6 +146,10 @@ The M0/M1 shell snapshot payload is:
 }
 ```
 
+`additions` and `deletions` count changes in the workspace (the current change
+for jj), not changes attributed to a thread. They are null when unavailable.
+The bridge shares one VCS subscription per active workspace.
+
 This is a view model, not a serialization of T3 contracts. During M1, shell `event` records carry the same replacement projection shape as snapshots, allowing the bridge to reduce and coalesce raw server updates without moving T3 reducer schemas into Elisp. An empty `projects` array is authoritative. `unread` marks a latest run that completed after the server-tracked last visit (false when the server does not track visits). Future fields remain optional. Future semantic item kinds must have bounded generic rendering in Emacs. When truncated, newer bridges also report `omittedSettledCount`, `omittedOtherCount`, and `omittedProjectCount`; consumers must treat absent counts from older bridges as unknown, not zero.
 
 ## Normalized thread projection
