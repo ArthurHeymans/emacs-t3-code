@@ -1,6 +1,6 @@
 EMACS ?= emacs
-ELFILES := t3-code-core.el t3-code-markdown.el t3-code-shell.el t3-code-render.el t3-code-thread.el t3-code-dashboard.el t3-code.el
-TESTFILES := test/t3-code-core-test.el test/t3-code-shell-test.el test/t3-code-thread-test.el test/t3-code-dashboard-test.el test/t3-code-integration-test.el
+ELFILES := t3-code-core.el t3-code-markdown.el t3-code-shell.el t3-code-render.el t3-code-thread.el t3-code-dashboard.el t3-code-fleet.el t3-code.el
+TESTFILES := test/t3-code-core-test.el test/t3-code-shell-test.el test/t3-code-thread-test.el test/t3-code-dashboard-test.el test/t3-code-fleet-test.el test/t3-code-integration-test.el
 T3CODE_DIR ?= ../t3code
 # Optional packages exercised by the tests when installed (markdown-mode).
 EXTRA_LOAD_PATH ?= $(wildcard $(HOME)/.emacs.d/elpa/markdown-mode-*)
@@ -19,7 +19,7 @@ compile:
 
 test:
 	$(EMACS) -Q --batch -L . -L test $(addprefix -L ,$(EXTRA_LOAD_PATH)) \
-		-l t3-code-core-test -l t3-code-shell-test -l t3-code-thread-test -l t3-code-dashboard-test -l t3-code-integration-test \
+		-l t3-code-core-test -l t3-code-shell-test -l t3-code-thread-test -l t3-code-dashboard-test -l t3-code-fleet-test -l t3-code-integration-test \
 		-f ert-run-tests-batch-and-exit
 
 clean:

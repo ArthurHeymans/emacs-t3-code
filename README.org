@@ -70,6 +70,26 @@ TRAMP; the bridge runs locally.
 Hiding a conversation does not stop the agent. Command output appears in
 the chat, not a live terminal.
 
+* Browser-shared remotes
+
+On an updated, loopback-bound local server, open Connections in the browser
+and enable =Share connections with local clients=. Enabled bearer remotes
+then appear in Emacs's ledger, grouped by environment, and in the thread
+switcher. Adding, disabling or removing connections updates these views.
+Turning sharing off clears the server's encrypted copy and disconnects the
+remote views, without deleting the browser's own connections.
+
+Connect Emacs to that primary server with an administrative bearer from
+=t3 auth session issue --token-only=. The primary bridge uses the remote
+credentials internally; they never reach Emacs. Ordinary pairing credentials
+and older servers still work for the primary, without shared discovery.
+Relay/DPoP connections are not shared.
+
+Remote chats and their input buffers use TRAMP workspace directories.
+For forwarded ports, different SSH hosts/users or containers, configure
+=t3-code-file-prefixes=: an HTTP endpoint alone cannot identify the correct
+filesystem transport.
+
 * Development
 
 =M-x t3-code-demo= runs without a server, using the fake bridge.
