@@ -79,6 +79,9 @@ they stay folded until you open them. Diff counts describe the workspace's
 changes (the current change for jj), not an individual thread's edits.
 Unavailable counts display =—=.
 
+Use =C-u C-c C-n= to choose a project across local and shared remote
+environments. The launch input header shows which environment will run it.
+
 * Browser-shared remotes
 
 On an updated local server, open the web UI through =localhost= or

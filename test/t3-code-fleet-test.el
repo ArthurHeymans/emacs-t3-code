@@ -201,6 +201,40 @@
           (t3-code-fleet-new-thread t)
           (should (eq selected remote)))))))
 
+(ert-deftest t3-code-test-fleet-launch-picker-selects-project-and-remote-together ()
+  (t3-code-test--with-catalog
+    (let* ((remote (t3-code-environment-create
+                    :id "remote" :label "t480-arthur" :endpoint "https://t480-arthur:3773"
+                    :parent root :state 'ready :capabilities '(:threadLifecycle t)))
+           (t3-code-new-thread-workspace 'root)
+           opened)
+      (setf (t3-code-environment-label root) "gmktec-k11"
+            (t3-code-environment-environments root) (list remote)
+            (t3-code-environment-capabilities root) '(:threadLifecycle t)
+            (t3-code-environment-shell root)
+            '(:projects ((:id "local-project" :name "App" :root "/local/app")))
+            (t3-code-environment-shell remote)
+            '(:projects ((:id "remote-project" :name "App" :root "/remote/app"))))
+      (cl-letf (((symbol-function 't3-code--current-environment) (lambda () root))
+                ((symbol-function 'completing-read)
+                 (lambda (_prompt candidates &rest _)
+                   (should (string-match-p "Local · gmktec-k11" (caar candidates)))
+                   (should (string-match-p "Remote · t480-arthur" (caadr candidates)))
+                   (caadr candidates)))
+                ((symbol-function 't3-code-thread--with-catalog)
+                 (lambda (_environment callback) (funcall callback nil)))
+                ((symbol-function 't3-code-thread--read-model-selection)
+                 (lambda (&rest _) '(:instanceId "pi" :model "test")))
+                ((symbol-function 't3-code-compose-open-launch)
+                 (lambda (environment launch) (setq opened (cons environment launch)))))
+        (t3-code-new-thread t))
+      (should (eq (car opened) remote))
+      (should (equal (plist-get (cdr opened) :projectId) "remote-project"))
+      (should (equal (plist-get (cdr opened) :directory) "/remote/app"))
+      (let ((t3-code-compose--environment remote)
+            (t3-code-compose--launch (cdr opened)))
+        (should (string-match-p "Remote · t480-arthur" (t3-code-compose--launch-header)))))))
+
 (ert-deftest t3-code-test-fleet-cold-tramp-entry-waits-for-catalog ()
   (t3-code-test--with-catalog
     (let (tick selected)
