@@ -14,6 +14,7 @@
 
 (require 'auth-source)
 (require 'url-parse)
+(require 'project)
 (require 't3-code-core)
 (require 't3-code-shell)
 (require 't3-code-thread)
@@ -268,6 +269,51 @@ On cold TRAMP entry, wait for discovery before choosing the owning server."
                             threads)))
     (car (sort (copy-sequence (or local threads)) #'t3-code--rank<))))
 
+(defun t3-code--project-root (directory)
+  "Return the innermost Emacs project or repository root for DIRECTORY.
+Recognize Jujutsu repositories even without a `project.el' backend."
+  (car (sort (delete-dups
+              (mapcar (lambda (root) (file-name-as-directory (expand-file-name root)))
+                      (delq nil (list (when-let* ((project (project-current nil directory)))
+                                        (project-root project))
+                                      (locate-dominating-file directory ".jj")
+                                      (locate-dominating-file directory ".git")))))
+             (lambda (a b) (> (length a) (length b))))))
+
+(defun t3-code--start-project-thread (environment project directory)
+  "Open a new-thread composer for PROJECT in ENVIRONMENT at DIRECTORY.
+Use a fresh buffer so asynchronous callbacks cannot inherit another chat."
+  (with-temp-buffer
+    (setq default-directory (t3-code-local-file environment directory))
+    (t3-code-new-thread nil project environment)))
+
+(defun t3-code--offer-registration (environment root)
+  "Offer to register server-side ROOT in ENVIRONMENT and start a thread."
+  (cond
+   ((not (and (t3-code-capability-p environment :projectRegistration)
+              (t3-code-capability-p environment :threadLifecycle)))
+    (t3-code-fleet environment)
+    (message "Project %s is not registered; update the T3 bridge to register it from Emacs"
+             root))
+   ((not (y-or-n-p (format "Register %s as a T3 project? " root)))
+    (t3-code-fleet environment))
+   (t
+    (t3-code-request
+     environment "project.create"
+     (list :commandId (t3-code-new-id) :projectId (t3-code-new-id)
+           :title (file-name-nondirectory (directory-file-name root))
+           :workspaceRoot (directory-file-name root))
+     (lambda (result error)
+       (if error
+           (progn
+             (t3-code-fleet environment)
+             (message "T3 project registration failed: %s"
+                      (or (plist-get error :message) error)))
+         ;; The shell event may arrive after the response.  Use the returned
+         ;; project instead of waiting for it or creating a duplicate.
+         (t3-code--start-project-thread
+          environment (plist-get result :project) root)))))))
+
 (defun t3-code--session-buffers ()
   "Return the chat and input buffers related to the current buffer."
   (cond ((derived-mode-p 't3-code-thread-mode)
@@ -280,8 +326,9 @@ On cold TRAMP entry, wait for discovery before choosing the owning server."
   "Open the T3 conversation for the current project.
 From a T3 buffer, restore missing chat/input windows and focus the input.
 Elsewhere, open the most relevant active thread of the project containing
-`default-directory', or offer to start one.  Outside known projects, or
-with prefix argument LEDGER, open the ledger of all threads instead.
+`default-directory', or offer to start one.  Offer to register an unknown
+Emacs project/repository instead of opening an enclosing project's thread.
+Outside projects, or with prefix argument LEDGER, open the ledger instead.
 
 Ask for a token on connect unless `t3-code-token' specifies one or uses
 the environment.  Reopening an already-connected environment does not
@@ -291,6 +338,7 @@ prompt."
     (if (and session (buffer-live-p (car session)) (not ledger))
         (t3-code-thread-show (car session) t)
       (let* ((directory default-directory)
+             (local-root (and (not ledger) (t3-code--project-root directory)))
              (environment (t3-code--environment)))
         (if ledger
             (t3-code-fleet environment)
@@ -298,16 +346,18 @@ prompt."
            environment directory
            (lambda (environment ready)
              (let* ((directory (t3-code-server-path environment directory))
+                    (root (and local-root (t3-code-server-path environment local-root)))
                     (project (and ready directory
                                   (t3-code-shell-project-for-directory
-                                   environment directory)))
+                                   environment directory root)))
                     (thread (and project (t3-code--project-thread project directory))))
                (cond
                 (thread (t3-code-thread-open environment thread))
                 ((and project (y-or-n-p (format "No active thread in %s; start one? "
                                                 (plist-get project :name))))
-                 (let ((default-directory (t3-code-local-file environment directory)))
-                   (t3-code-new-thread)))
+                 (t3-code--start-project-thread environment project directory))
+                ((and ready root (not project))
+                 (t3-code--offer-registration environment root))
                 (t (t3-code-fleet environment)))))))))))
 
 ;;;###autoload
@@ -401,7 +451,10 @@ prompt."
                                                           t3-code-compose--origin-buffer)))))
         (car (t3-code-shell-find-thread environment thread-id)))
       (when-let* ((directory (t3-code-server-path environment default-directory)))
-        (t3-code-shell-project-for-directory environment directory))))
+        (t3-code-shell-project-for-directory
+         environment directory
+         (when-let* ((root (t3-code--project-root default-directory)))
+           (t3-code-server-path environment root))))))
 
 (defun t3-code-resume ()
   "Resume a settled or archived thread of the current project.
@@ -491,13 +544,15 @@ Outside a known project, offer settled threads of every project."
           (list :type "existing_worktree" :worktreePath (expand-file-name path))))
     (_ (list :type "root"))))
 
-(defun t3-code-new-thread (&optional choose)
+(defun t3-code-new-thread (&optional choose project environment)
   "Start a new thread in the current project.
 The input buffer opens first; \\[t3-code-compose-send] starts the thread
 with its first message.  With prefix argument CHOOSE, pick the project and
-model instead of inheriting them from the current thread."
+model instead of inheriting them from the current thread.
+Noninteractively, PROJECT and ENVIRONMENT can supply a just-registered
+project before its shell update arrives."
   (interactive "P")
-  (let* ((environment (t3-code--current-environment))
+  (let* ((environment (or environment (t3-code--current-environment)))
          (_ (unless (t3-code-capability-p environment :threadLifecycle)
               (user-error "Connected bridge cannot start threads")))
          (source (cond ((derived-mode-p 't3-code-thread-mode) (t3-code-thread--thread))
@@ -505,7 +560,7 @@ model instead of inheriting them from the current thread."
                         (with-current-buffer t3-code-compose--origin-buffer
                           (t3-code-thread--thread)))))
          (projects (plist-get (t3-code-environment-shell environment) :projects))
-         (project (or (and (not choose) (t3-code--current-project environment))
+         (project (or project (and (not choose) (t3-code--current-project environment))
                       (let ((names (mapcar (lambda (project)
                                              (cons (plist-get project :name) project))
                                            projects)))

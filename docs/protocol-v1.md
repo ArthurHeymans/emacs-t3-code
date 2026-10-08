@@ -226,6 +226,16 @@ Pairing requests both `orchestration:read` and `orchestration:operate`. Mutation
 
 A bridge advertising `modelSelection: true` also supports `model.catalog` (a bounded request result with provider instance IDs, display names, availability, model slugs and select/boolean option descriptors). The thread projection carries the selected `modelSelection` and the active run's `activeRunProvider` / `activeRunModel` (when present). `hasStartedSession` helps clients explain providers that require a new thread for model changes. An older bridge has none of these fields or operations; clients must not offer selection without the capability.
 
+### Project registration
+
+A bridge advertising `projectRegistration: true` supports `project.create`:
+`{commandId, projectId, title, workspaceRoot}` registers an existing server-side
+directory through the project service and returns
+`{project: {id, name, root, threads: []}}`. IDs are client-supplied, and the
+mutation is not automatically retried. The response lets clients open a
+new-thread composer before the shell projection includes the project.
+No directory or repository is created by this operation.
+
 ### Thread lifecycle
 
 A bridge advertising `threadLifecycle: true` also supports:

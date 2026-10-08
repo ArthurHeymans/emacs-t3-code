@@ -25,6 +25,38 @@
    :id (format "fake-%s" name) :endpoint (format "fake://%s" name)
    :directory t3-code-test--root))
 
+(ert-deftest t3-code-test-fake-bridge-registers-project-and-updates-shell ()
+  (skip-unless (executable-find "node"))
+  (let* ((t3-code-bridge-command (t3-code-test--fake-command))
+         (environment (t3-code-test--environment "register"))
+         result failure)
+    (unwind-protect
+        (progn
+          (t3-code-connect environment)
+          (t3-code-shell-ensure environment)
+          (should (t3-code-test--wait-until
+                   (lambda () (t3-code-environment-shell environment))))
+          (should (t3-code-capability-p environment :projectRegistration))
+          (t3-code-request
+           environment "project.create"
+           '(:commandId "register" :projectId "majutsu" :title "majutsu"
+             :workspaceRoot "/home/me/src/majutsu")
+           (lambda (value error) (setq result value failure error)))
+          (should (t3-code-test--wait-until (lambda () (or result failure))))
+          (should-not failure)
+          (should (equal (plist-get (plist-get result :project) :root)
+                         "/home/me/src/majutsu"))
+          (should (t3-code-test--wait-until
+                   (lambda () (t3-code-shell-find-project environment "majutsu"))))
+          (should (equal (plist-get (t3-code-shell-project-for-directory
+                                    environment "/home/me/src/majutsu/test/"
+                                    "/home/me/src/majutsu/") :id)
+                         "majutsu")))
+      (t3-code-disconnect environment)
+      (when-let* ((buffer (get-buffer (format " *t3:%s:stderr*"
+                                             (t3-code-environment-id environment)))))
+        (kill-buffer buffer)))))
+
 (ert-deftest t3-code-test-fake-bridge-handshake-request-and-subscription ()
   (skip-unless (executable-find "node"))
   (let* ((t3-code-bridge-command (t3-code-test--fake-command))

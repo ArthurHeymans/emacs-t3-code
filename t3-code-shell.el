@@ -86,16 +86,20 @@ not scan the buffer list.")
        (string-prefix-p (file-name-as-directory (expand-file-name root))
                         (file-name-as-directory (expand-file-name directory)))))
 
-(defun t3-code-shell-project-for-directory (environment directory)
+(defun t3-code-shell-project-for-directory (environment directory &optional project-root)
   "Return the project of ENVIRONMENT containing DIRECTORY.
 A thread worktree inside or outside the project root also identifies its
-project.  The most specific match wins."
+project.  The most specific match wins.  With PROJECT-ROOT, ignore matches
+above that Emacs project/repository boundary.  Paths are server-side."
   (car (car (seq-sort-by
              (lambda (match) (- (length (cdr match))))
              #'<
              (mapcan (lambda (project)
                        (seq-keep (lambda (root)
-                                   (when (t3-code-shell--path-within-p directory root)
+                                   (when (and (t3-code-shell--path-within-p directory root)
+                                              (or (null project-root)
+                                                  (t3-code-shell--path-within-p
+                                                   root project-root)))
                                      (cons project root)))
                                  (cons (plist-get project :root)
                                        (mapcar (lambda (thread) (plist-get thread :path))

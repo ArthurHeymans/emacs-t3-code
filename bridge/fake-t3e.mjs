@@ -356,6 +356,7 @@ const sendSubscription = (subscriptionId) => {
     sequence: snapshotSequence + 1,
     payload: subscriptionPayload(subscription),
   });
+  subscription.resumeSequence = snapshotSequence + 1;
 };
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -386,6 +387,7 @@ rl.on("line", (line) => {
           modelSelection: true,
           threadLifecycle: true,
           composerCompletion: true,
+          projectRegistration: true,
           terminal: false,
         },
       });
@@ -405,6 +407,18 @@ rl.on("line", (line) => {
         });
       } else if (message.operation in results) {
         write({ kind: "response", id: message.id, result: results[message.operation] });
+      } else if (message.operation === "project.create") {
+        const project = {
+          id: message.input.projectId,
+          name: message.input.title,
+          root: message.input.workspaceRoot,
+          threads: [],
+        };
+        shellPayload.projects.push(project);
+        write({ kind: "response", id: message.id, result: { project } });
+        for (const [id, subscription] of subscriptions) {
+          if (subscription.stream === "shell") sendSubscription(id);
+        }
       } else if (message.operation === "thread.create") {
         write({ kind: "response", id: message.id, result: { threadId: "thread-doh" } });
       } else if (message.operation === "thread.fork") {

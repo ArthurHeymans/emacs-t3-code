@@ -36,8 +36,12 @@ Use =M-x t3-code-connect-prompt= to connect to a different server.
 
 * Using it
 
-Run =M-x t3-code= from a project to open its conversation. Outside a known
-project, or with =C-u=, it opens the thread ledger instead.
+Run =M-x t3-code= from a project to open its conversation. If the current
+Emacs project or repository isn't registered in T3, it offers to register
+it and open a new-thread composer there. Declining opens the ledger, not
+an enclosing project's conversation. Outside projects, or with =C-u=,
+it opens the ledger. Registration requires a bridge advertising
+=projectRegistration=; older bridges open the ledger instead.
 
 Write in the input buffer and press =C-c C-c= to send. While the agent is
 working, this queues a follow-up; =C-c C-s= steers the current turn instead.
