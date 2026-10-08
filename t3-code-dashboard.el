@@ -74,6 +74,14 @@
 
 (defvar-local t3-code-dashboard--environment nil)
 (defvar-local t3-code-dashboard--subscription nil)
+(defvar-local t3-code-dashboard--row-id-function nil
+  "Optional function translating a fleet row into this dashboard's domain ID.")
+
+(defun t3-code-dashboard--row-id ()
+  "Return the current row's domain ID, accounting for a fleet context."
+  (if t3-code-dashboard--row-id-function
+      (funcall t3-code-dashboard--row-id-function)
+    (tabulated-list-get-id)))
 (defvar-local t3-code-dashboard--projects nil)
 (defvar-local t3-code-dashboard--shell-truncated nil)
 (defvar-local t3-code-dashboard--omitted-settled-count nil)
@@ -396,7 +404,7 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
 (defun t3-code-dashboard-open-thread ()
   "Open the thread or toggle the section at point."
   (interactive)
-  (if-let* ((id (tabulated-list-get-id)))
+  (if-let* ((id (t3-code-dashboard--row-id)))
       (unless (t3-code-dashboard--toggle-id id)
         (if (eq id t3-code-dashboard--truncated-heading-id)
             (user-error "Some projects or threads are omitted by bridge limits")
@@ -408,7 +416,7 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
 (defun t3-code-dashboard-toggle-at-point ()
   "Collapse or expand the menu at point."
   (interactive)
-  (unless (t3-code-dashboard--toggle-id (tabulated-list-get-id))
+  (unless (t3-code-dashboard--toggle-id (t3-code-dashboard--row-id))
     (user-error "No collapsible T3 menu at point")))
 
 (defun t3-code-dashboard-toggle-agents (parent-id)
@@ -470,7 +478,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
 
 (defun t3-code-dashboard--thread-at-point ()
   "Return the normalized thread on the current row."
-  (or (t3-code-dashboard--find-thread (tabulated-list-get-id))
+  (or (t3-code-dashboard--find-thread (t3-code-dashboard--row-id))
       (user-error "No T3 thread at point")))
 
 (defun t3-code-dashboard--dispatch (type message)
@@ -504,7 +512,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   "Start a thread in the project at point; ARG as in `t3-code-new-thread'."
   (interactive "P")
   (let ((default-directory
-         (or (when-let* ((thread (t3-code-dashboard--find-thread (tabulated-list-get-id)))
+         (or (when-let* ((thread (t3-code-dashboard--find-thread (t3-code-dashboard--row-id)))
                          (directory (t3-code-local-file t3-code-dashboard--environment
                                                         (plist-get thread :path))))
                (file-name-as-directory directory))

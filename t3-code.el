@@ -18,6 +18,7 @@
 (require 't3-code-shell)
 (require 't3-code-thread)
 (require 't3-code-dashboard)
+(require 't3-code-fleet)
 
 (defcustom t3-code-default-endpoint "http://127.0.0.1:3773"
   "Default T3 server HTTP endpoint."
@@ -149,7 +150,18 @@ the bridge reports as `websocket-ticket-failed'."
 
 (defun t3-code--reconnect (environment)
   "Restart ENVIRONMENT with the configured authentication setting."
-  (t3-code-restart environment (t3-code--configured-credential environment)))
+  (t3-code-restart environment
+                   (unless (t3-code-environment-parent environment)
+                     (t3-code--configured-credential environment))))
+
+(defun t3-code--environment-for-directory (environment directory)
+  "Select DIRECTORY's discovered server, retaining its TRAMP user and hops."
+  (or (when (file-remote-p directory)
+        (seq-find (lambda (remote)
+                    (t3-code-note-directory remote directory)
+                    (t3-code-server-path remote directory))
+                  (t3-code-environment-environments environment)))
+      environment))
 
 (defun t3-code--environment (&optional endpoint)
   "Return the connected environment for ENDPOINT, connecting if needed."
@@ -159,7 +171,12 @@ the bridge reports as `websocket-ticket-failed'."
     (t3-code-note-directory environment default-directory)
     (unless (process-live-p (t3-code-environment-process environment))
       (t3-code--reconnect environment))
-    (t3-code-shell-ensure environment)))
+    (let ((selected (t3-code--environment-for-directory environment default-directory)))
+      (when (and (t3-code-environment-parent selected)
+                 (eq (t3-code-environment-state environment) 'ready)
+                 (not (process-live-p (t3-code-environment-process selected))))
+        (t3-code--reconnect selected))
+      (t3-code-shell-ensure selected))))
 
 (defun t3-code--bridge-directory ()
   "Return a local directory to start the bridge in.
@@ -170,6 +187,8 @@ The bridge always runs on this machine, even when visiting remote files."
   "Return the environment of the current T3 buffer, or the default one."
   (or t3-code-thread--environment
       t3-code-compose--environment
+      (and (derived-mode-p 't3-code-fleet-mode)
+           (t3-code-fleet-environment-at-point))
       (bound-and-true-p t3-code-dashboard--environment)
       (t3-code--environment)))
 
@@ -187,6 +206,36 @@ The bridge always runs on this machine, even when visiting remote files."
                            (eq (t3-code-environment-state environment) 'disconnected))
                    (cancel-timer timer)
                    (funcall callback ready)))))))))
+
+(defun t3-code--when-directory (environment directory callback)
+  "Call CALLBACK with DIRECTORY's environment and its shell readiness.
+On cold TRAMP entry, wait for discovery before choosing the owning server."
+  (let* ((root (t3-code-fleet-root environment))
+         (needs-catalog (and (file-remote-p directory)
+                             (not (t3-code-server-path environment directory))))
+         (deadline (+ (float-time) 15)) timer
+         (finish (lambda ()
+                   (let ((selected (t3-code--environment-for-directory root directory)))
+                     (when (and (t3-code-environment-parent selected)
+                                (eq (t3-code-environment-state root) 'ready)
+                                (not (process-live-p (t3-code-environment-process selected))))
+                       (t3-code--reconnect selected))
+                     (t3-code-shell-ensure selected)
+                     (t3-code--when-shell selected
+                                          (lambda (ready) (funcall callback selected ready)))))))
+    (if (not needs-catalog)
+        (t3-code--when-shell environment (lambda (ready) (funcall callback environment ready)))
+      (setq timer
+            (run-at-time
+             0.1 0.1
+             (lambda ()
+               (when (or (> (float-time) deadline)
+                         (eq (t3-code-environment-state root) 'disconnected)
+                         (and (eq (t3-code-environment-state root) 'ready)
+                              (or (not (t3-code-capability-p root :environments))
+                                  (t3-code-fleet-loaded-p root))))
+                 (cancel-timer timer)
+                 (funcall finish))))))))
 
 (defun t3-code--rank (thread)
   "Sort key for THREAD: working, then unseen, then most recently updated."
@@ -241,14 +290,15 @@ prompt."
   (let ((session (t3-code--session-buffers)))
     (if (and session (buffer-live-p (car session)) (not ledger))
         (t3-code-thread-show (car session) t)
-      (let* ((environment (t3-code--environment))
-             (directory (t3-code-server-path environment default-directory)))
+      (let* ((directory default-directory)
+             (environment (t3-code--environment)))
         (if ledger
-            (t3-code-dashboard environment)
-          (t3-code--when-shell
-           environment
-           (lambda (ready)
-             (let* ((project (and ready directory
+            (t3-code-fleet environment)
+          (t3-code--when-directory
+           environment directory
+           (lambda (environment ready)
+             (let* ((directory (t3-code-server-path environment directory))
+                    (project (and ready directory
                                   (t3-code-shell-project-for-directory
                                    environment directory)))
                     (thread (and project (t3-code--project-thread project directory))))
@@ -258,13 +308,13 @@ prompt."
                                                 (plist-get project :name))))
                  (let ((default-directory (t3-code-local-file environment directory)))
                    (t3-code-new-thread)))
-                (t (t3-code-dashboard environment)))))))))))
+                (t (t3-code-fleet environment)))))))))))
 
 ;;;###autoload
 (defun t3-code-ledger (&optional environment)
   "Open the ledger of all threads in ENVIRONMENT."
   (interactive)
-  (t3-code-dashboard (or environment (t3-code--current-environment))))
+  (t3-code-fleet (or environment (t3-code--current-environment))))
 
 (defun t3-code-toggle ()
   "Hide the current T3 chat and input windows, or show them again."
@@ -313,13 +363,31 @@ prompt."
 (defun t3-code-switch-thread ()
   "Switch to any active thread, grouped by project and ranked by activity."
   (interactive)
-  (let* ((environment (t3-code--current-environment))
-         (entries (seq-filter (lambda (entry) (not (eq (plist-get (cdr entry) :settled) t)))
+  (let* ((environments (t3-code-fleet-members (t3-code--current-environment)))
+         (candidates
+          (mapcan
+           (lambda (environment)
+             (let* ((entries (seq-filter
+                              (lambda (entry) (not (eq (plist-get (cdr entry) :settled) t)))
                               (t3-code-shell-entries environment)))
-         (entries (sort entries (lambda (a b) (t3-code--rank< (cdr a) (cdr b))))))
-    (t3-code-thread-open environment
-                         (t3-code--read-thread "Switch to thread: "
-                                               (t3-code--thread-candidates environment entries)))))
+                    (entries (sort entries (lambda (a b) (t3-code--rank< (cdr a) (cdr b)))))
+                    (label (or (t3-code-environment-label environment)
+                               (t3-code-environment-endpoint environment))))
+               (mapcar
+                (lambda (candidate)
+                  (let ((name (copy-sequence (car candidate))))
+                    (put-text-property
+                     0 (length name) 't3-code-group
+                     (format "%s / %s" label (get-text-property 0 't3-code-group name)) name)
+                    (cons (apply #'propertize
+                                 (format "%s · %s [%s]" label name
+                                         (t3-code-environment-id environment))
+                                 (text-properties-at 0 name))
+                          (cons environment (cdr candidate)))))
+                (t3-code--thread-candidates environment entries))))
+           environments))
+         (selection (t3-code--read-thread "Switch to thread: " candidates)))
+    (t3-code-thread-open (car selection) (cdr selection))))
 
 (defun t3-code--current-project (environment)
   "Return the project of the current buffer in ENVIRONMENT, if known."
@@ -492,7 +560,8 @@ environment or the T3 environment state.  Reconnecting requires a new token."
       ;; Restart also re-subscribes existing ledger and thread views.
       (t3-code-restart environment (cons (if bearer 'bearer 'pairing) token))
       (t3-code-shell-ensure environment)
-      (t3-code-dashboard environment))))
+      (t3-code-note-directory environment default-directory)
+      (t3-code-fleet environment))))
 
 (defun t3-code-demo ()
   "Open the ledger against the repository's deterministic fake bridge."

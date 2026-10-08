@@ -66,6 +66,50 @@ Subscriptions are reference counted in Emacs. Killing one view releases its refe
 
 Safe state phases include `connecting`, `authenticating`, `snapshot`, `resuming`, `ready`, `repairing`, and `retrying`. A fatal record is not retried by the protocol layer.
 
+## Optional local environment gateway
+
+When the authenticated primary loopback server supports opt-in browser sharing
+and the caller has administrative catalog access, `ready.capabilities.environments`
+is `true`.  Servers or credentials without this capability remain compatible.
+Subscribe to stream `"environments"` with identity `null`.  Its authoritative
+snapshot and event payload is metadata only:
+
+```json
+{"environments":[{"id":"catalog-id","label":"Devbox","endpoint":"https://devbox:3773","enabled":true}]}
+```
+
+An empty array removes all discovered children; the primary server is not included.
+No bearer tokens, pairing credentials, or relay secrets appear in this projection.
+
+Attach a catalog entry with the normal request envelope, operation
+`"environment.attach"` and input:
+
+```json
+{"environmentId":"catalog-id","clientEnvironmentId":"root::catalog-id","generation":1}
+```
+
+The reply is `{"attached":true}`.  The gateway resolves the destination and bearer
+internally from the authenticated server; the editor cannot substitute an endpoint.
+The attached bridge's ordinary protocol records are wrapped:
+
+```json
+{"kind":"environment.message","environmentId":"root::catalog-id","generation":1,"message":{"kind":"snapshot","subscriptionId":"shell:null","generation":1,"sequence":1,"payload":{"projects":[]}}}
+```
+
+The outer generation identifies the attachment.  The inner generation retains
+normal child-connection semantics.  Ignore records for stale attachments.  Route
+normal requests, subscriptions and cancellation to that child as:
+
+```json
+{"kind":"environment.send","environmentId":"root::catalog-id","message":{"kind":"subscribe","subscriptionId":"shell:null","stream":"shell","identity":null}}
+```
+
+Request `"environment.detach"` with
+`{"clientEnvironmentId":"root::catalog-id"}` to stop it.  Removing or disabling a
+catalog entry stops its attachment; primary exit stops all children.  A child fatal
+is local to that environment and must not fail the primary or siblings.  The
+editor never prompts for a shared child's credentials on reconnect.
+
 ## Normalized shell projection
 
 The M0/M1 shell snapshot payload is:

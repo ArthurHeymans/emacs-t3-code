@@ -66,7 +66,9 @@ otherwise freeze the view."
   (cache (make-hash-table :test #'equal))
   ;; TRAMP prefix of a remote buffer that reached this server's host, kept
   ;; so its method, user and hops are reused (see `t3-code-file-prefix').
-  remote-prefix)
+  remote-prefix
+  ;; A shared-catalog connection uses its parent's bridge, never its credentials.
+  parent catalog-id label environments environments-reference)
 
 (cl-defstruct (t3-code-subscription
                (:constructor t3-code-subscription-create))
@@ -230,7 +232,13 @@ port, whose endpoint looks local."
   (let ((process (t3-code-environment-process environment)))
     (unless (process-live-p process)
       (error "T3 bridge is not running"))
-    (process-send-string process (t3-code--json-line object))))
+    (process-send-string
+     process (t3-code--json-line
+              (if (t3-code-environment-parent environment)
+                  (list :kind "environment.send"
+                        :environmentId (t3-code-environment-id environment)
+                        :message object)
+                object)))))
 
 (defun t3-code--send (environment object)
   "Send OBJECT when ENVIRONMENT is ready, preserving FIFO order."
@@ -347,6 +355,15 @@ port, whose endpoint looks local."
 (defun t3-code--dispatch (environment message)
   "Dispatch one normalized bridge MESSAGE for ENVIRONMENT."
   (pcase (plist-get message :kind)
+    ("environment.message"
+     (let ((child (gethash (plist-get message :environmentId) t3-code--environments)))
+       (if (and child
+                (eq (t3-code-environment-parent child) environment)
+                (process-live-p (t3-code-environment-process child))
+                (equal (plist-get message :generation)
+                       (t3-code-environment-generation child)))
+           (t3-code--dispatch child (plist-get message :message))
+         (t3-code--diagnose environment "Ignored stale or unknown environment message"))))
     ("ready" (t3-code--handle-ready environment message))
     ("response" (t3-code--handle-response environment message))
     ((or "snapshot" "event" "synchronized")
@@ -376,8 +393,14 @@ port, whose endpoint looks local."
                                                        (min (length stderr)
                                                             t3-code-stderr-max-chars)))
                           ""))
-     (when-let* ((process (t3-code-environment-process environment)))
-       (delete-process process)))
+     (if (t3-code-environment-parent environment)
+         (progn
+           (setf (t3-code-environment-process environment) nil
+                 (t3-code-environment-outbound-queue environment) nil)
+           (t3-code--fail-pending environment (t3-code-environment-fatal-error environment))
+           (t3-code--set-state environment 'disconnected))
+       (when-let* ((process (t3-code-environment-process environment)))
+         (delete-process process))))
     (_ (t3-code--diagnose environment "Unknown bridge message kind: %S"
                            (plist-get message :kind)))))
 
@@ -537,12 +560,41 @@ on its own, and a released subscription needs nothing."
              (t3-code--diagnose environment "Subscription callback failed: %s"
                                 (error-message-string error))))))))))
 
+(defun t3-code--connect-through (environment)
+  "Attach ENVIRONMENT through its parent without exposing a bearer token."
+  (let* ((parent (t3-code-environment-parent environment))
+         (process (t3-code-environment-process parent)))
+    (unless (and (process-live-p process)
+                 (eq (t3-code-environment-state parent) 'ready))
+      (user-error "The catalog connection is not ready"))
+    (clrhash (t3-code-environment-cache environment))
+    (setf (t3-code-environment-process environment) process
+          (t3-code-environment-generation environment)
+          (1+ (t3-code-environment-generation environment))
+          (t3-code-environment-fatal-error environment) nil
+          (t3-code-environment-exit-error environment) nil)
+    (t3-code--set-state environment 'connecting)
+    (let ((generation (t3-code-environment-generation environment)))
+      (t3-code-request
+       parent "environment.attach"
+       (list :environmentId (t3-code-environment-catalog-id environment)
+             :clientEnvironmentId (t3-code-environment-id environment)
+             :generation generation)
+       (lambda (_result error)
+         (when (and error (= generation (t3-code-environment-generation environment))
+                    (eq process (t3-code-environment-process environment)))
+           (t3-code--dispatch environment
+                              (append (list :kind "fatal") error)))))))
+  environment)
+
 (defun t3-code-connect (environment &optional credential)
   "Start ENVIRONMENT's bridge and initiate the protocol handshake.
 CREDENTIAL, when non-nil, is (TYPE . TOKEN), where TYPE is `pairing' or
 `bearer'.  Only the bridge process inherits it; no token is retained."
   (unless (process-live-p (t3-code-environment-process environment))
-    (unless (and (listp t3-code-bridge-command) t3-code-bridge-command)
+    (if (t3-code-environment-parent environment)
+        (t3-code--connect-through environment)
+      (unless (and (listp t3-code-bridge-command) t3-code-bridge-command)
       (user-error "`t3-code-bridge-command' is not configured"))
     (let* ((default-directory (t3-code-environment-directory environment))
            (_ (when (file-remote-p default-directory)
@@ -592,14 +644,23 @@ CREDENTIAL, when non-nil, is (TYPE . TOKEN), where TYPE is `pairing' or
                          :generation (t3-code-environment-generation environment)))))
         (error
          (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
-         (signal (car error) (cdr error))))))
+         (signal (car error) (cdr error)))))))
   environment)
 
 (defun t3-code-disconnect (environment)
   "Explicitly disconnect ENVIRONMENT and discard queued outbound work."
   (setf (t3-code-environment-outbound-queue environment) nil)
-  (when-let* ((process (t3-code-environment-process environment)))
-    (delete-process process))
+  (if-let* ((parent (t3-code-environment-parent environment)))
+      (progn
+        (when (process-live-p (t3-code-environment-process parent))
+          (t3-code-request parent "environment.detach"
+                           (list :clientEnvironmentId (t3-code-environment-id environment))
+                           #'ignore))
+        (setf (t3-code-environment-process environment) nil)
+        (t3-code--fail-pending environment '(:code "disconnected" :message "Environment disconnected"))
+        (t3-code--set-state environment 'disconnected))
+    (when-let* ((process (t3-code-environment-process environment)))
+      (delete-process process)))
   environment)
 
 (defun t3-code-restart (environment &optional credential)

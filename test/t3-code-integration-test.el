@@ -121,12 +121,18 @@
                  (lambda (message)
                    (when (equal (plist-get message :kind) "snapshot")
                      (push (plist-get message :sequence) snapshot-sequences)))))
+          ;; The fake sends an event after its snapshot; resume the processed
+          ;; event sequence, not whichever pipe chunk arrived first.
           (should (t3-code-test--wait-until
-                   (lambda () (= (length snapshot-sequences) 1))))
+                   (lambda () (equal (t3-code-subscription-sequence
+                                      (t3-code-subscription-reference-subscription reference))
+                                     11))))
           (should (= (t3-code-environment-generation environment) 1))
           (t3-code-restart environment)
           (should (t3-code-test--wait-until
-                   (lambda () (= (length snapshot-sequences) 2))))
+                   (lambda () (equal (t3-code-subscription-sequence
+                                      (t3-code-subscription-reference-subscription reference))
+                                     13))))
           (should (equal (nreverse snapshot-sequences) '(10 12)))
           (should (= (t3-code-subscription-sequence
                       (t3-code-subscription-reference-subscription reference))
