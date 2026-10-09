@@ -68,9 +68,12 @@ Safe state phases include `connecting`, `authenticating`, `snapshot`, `resuming`
 
 ## Optional local environment gateway
 
-When the authenticated primary loopback server supports opt-in browser sharing
-and the caller has administrative catalog access, `ready.capabilities.environments`
-is `true`.  Servers or credentials without this capability remain compatible.
+When the authenticated connection to the primary uses loopback, the server
+supports opt-in browser sharing and the caller has administrative catalog access,
+`ready.capabilities.environments` is `true`.
+The server's listen address may still be `0.0.0.0` or `::`; the
+actual peer, endpoint and browser origin determine local access.
+Servers or credentials without this capability remain compatible.
 Subscribe to stream `"environments"` with identity `null`.  Its authoritative
 snapshot and event payload is metadata only:
 

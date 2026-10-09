@@ -76,10 +76,11 @@ the chat, not a live terminal.
 
 * Browser-shared remotes
 
-On an updated, loopback-bound local server, open Connections in the browser
-and enable =Share connections with local clients=. Enabled bearer remotes
-then appear in Emacs's ledger, grouped by environment, and in the thread
-switcher. Adding, disabling or removing connections updates these views.
+On an updated local server, open the web UI through =localhost= or
+=127.0.0.1= and enable =Share connections with local clients= in Connections.
+The server can still listen on =0.0.0.0= for network access. Enabled bearer
+remotes then appear in Emacs's ledger, grouped by environment, and in the
+thread switcher. Adding, disabling or removing connections updates these views.
 Turning sharing off clears the server's encrypted copy and disconnects the
 remote views, without deleting the browser's own connections.
 
