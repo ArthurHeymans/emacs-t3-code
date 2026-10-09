@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 't3-code-core)
+(require 'tramp)
 
 (ert-deftest t3-code-test-accumulates-split-lines ()
   (let* ((first (t3-code--accumulate-line-chunks nil "{\"kind\":\"rea"))
@@ -254,6 +255,37 @@
     (should (equal (t3-code-local-file forwarded "/src/app") "/ssh:devbox:/src/app"))
     (t3-code-note-directory forwarded "/ssh:me@devbox:/src/")
     (should (equal (t3-code-local-file forwarded "/src/app") "/ssh:devbox:/src/app"))))
+
+(ert-deftest t3-code-test-core-tramp-transport-is-independent-of-cwd-routing ()
+  (let* ((tramp-methods (cons (cons "rpc" (cdr (assoc "ssh" tramp-methods))) tramp-methods))
+         (tramp-default-proxies-alist nil)
+         (endpoint "http://localhost:4000")
+         (environment (t3-code-environment-create :endpoint endpoint))
+         (t3-code-file-prefixes
+          `((,endpoint . "/ssh:jump|rpc:me@devbox#2222:"))))
+    (should (equal (t3-code-local-file environment "/srv/app")
+                   "/ssh:jump|rpc:me@devbox#2222:/srv/app"))
+    (should (equal (t3-code-server-path
+                    environment "/ssh:jump|ssh:me@devbox#2222:/srv/app/")
+                   "/srv/app/"))
+    (dolist (elsewhere '("/ssh:other|ssh:me@devbox#2222:/srv/app/"
+                         "/ssh:jump|ssh:other@devbox#2222:/srv/app/"
+                         "/ssh:jump|ssh:me@elsewhere#2222:/srv/app/"
+                         "/ssh:jump|ssh:me@devbox#2223:/srv/app/"))
+      (should-not (t3-code-server-path environment elsewhere)))))
+
+(ert-deftest t3-code-test-core-rpc-default-retains-an-invoking-tramp-login ()
+  (let ((tramp-methods (cons (cons "rpc" (cdr (assoc "ssh" tramp-methods))) tramp-methods))
+        (tramp-default-proxies-alist nil)
+        (environment (t3-code-environment-create :endpoint "https://devbox:3773"))
+        (t3-code-file-prefixes nil)
+        (t3-code-tramp-default-method "rpc"))
+    (should (equal (t3-code-local-file environment "/srv/app") "/rpc:devbox:/srv/app"))
+    (t3-code-note-directory environment "/ssh:jump|rpc:me@devbox:/srv/app/")
+    (should (equal (t3-code-local-file environment "/srv/app")
+                   "/ssh:jump|rpc:me@devbox:/srv/app"))
+    (should (equal (t3-code-server-path environment "/ssh:jump|rpc:me@devbox:/srv/app/")
+                   "/srv/app/"))))
 
 (provide 't3-code-core-test)
 ;;; t3-code-core-test.el ends here

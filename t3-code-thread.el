@@ -1598,7 +1598,10 @@ exist; a remote one is not checked, which would open a TRAMP connection."
               (directory (t3-code-local-file environment
                                              (or path (t3-code-thread--worktree-path))))
               ((or (file-remote-p directory) (file-directory-p directory))))
-    (file-name-as-directory directory)))
+    ;; TRAMP's `file-name-as-directory' can normalize away explicit hop chains.
+    (if (file-remote-p directory)
+        (concat directory (unless (string-suffix-p "/" directory) "/"))
+      (file-name-as-directory directory))))
 
 (defun t3-code-thread--follow-directory ()
   "Make the chat and its input visit the thread worktree, like a shell's cwd."

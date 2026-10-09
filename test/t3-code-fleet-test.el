@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 't3-code)
+(require 'tramp)
 
 (defmacro t3-code-test--with-catalog (&rest body)
   "Run BODY with a live simulated primary bridge and captured outbound records."
@@ -235,6 +236,41 @@
                    (lambda (&rest _) (ert-fail "Child reconnect asked for a token"))))
           (should (eq (t3-code--environment endpoint) remote)))
         (should (= (t3-code-environment-generation remote) 2))))))
+
+(ert-deftest t3-code-test-fleet-ssh-cwd-selects-rpc-chat-on-a-forwarded-host ()
+  (t3-code-test--with-catalog
+    (save-window-excursion
+      (let* ((tramp-methods (cons (cons "rpc" (cdr (assoc "ssh" tramp-methods))) tramp-methods))
+             (tramp-default-proxies-alist nil)
+             (t3-code--thread-buffers (make-hash-table :test #'equal))
+             (t3-code-input-window-display 'always)
+             (t3-code-default-endpoint (t3-code-environment-endpoint root))
+             (t3-code-file-prefixes '(("http://localhost:4000" . "/ssh:jump|rpc:me@devbox:"))))
+        (puthash t3-code-default-endpoint root t3-code--environments)
+        (t3-code-fleet--receive
+         root (t3-code-test--catalog-message
+               '(:id "remote" :endpoint "http://localhost:4000")))
+        (let ((remote (car (t3-code-environment-environments root))))
+          (setf (t3-code-environment-state remote) 'ready
+                (t3-code-environment-capabilities remote) '(:threads t :shell t)
+                (t3-code-environment-shell remote)
+                '(:projects ((:id "project" :name "App" :root "/srv/app"
+                              :threads ((:id "rpc-chat" :title "Fix" :path "/srv/app"
+                                         :status "idle"))))))
+          (unwind-protect
+              (cl-letf (((symbol-function 't3-code--project-root)
+                         (lambda (_) "/ssh:jump|ssh:me@devbox:/srv/app/")))
+                (with-temp-buffer
+                  (setq default-directory "/ssh:jump|ssh:me@devbox:/srv/app/src/")
+                  (t3-code)
+                  (should (derived-mode-p 't3-code-thread-mode))
+                  (should (eq t3-code-thread--environment remote))
+                  (should (equal t3-code-thread--thread-id "rpc-chat"))
+                  (should (equal default-directory "/ssh:jump|rpc:me@devbox:/srv/app/"))
+                  (should (equal (with-current-buffer t3-code-thread--composer default-directory)
+                                 "/ssh:jump|rpc:me@devbox:/srv/app/"))))
+            (when-let* ((buffer (t3-code-thread-buffer remote "rpc-chat")))
+              (kill-buffer buffer))))))))
 
 (provide 't3-code-fleet-test)
 ;;; t3-code-fleet-test.el ends here
