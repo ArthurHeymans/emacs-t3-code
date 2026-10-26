@@ -758,6 +758,7 @@ FALLBACK names the model when SELECTION is nil."
     (string-join
      (delq nil
            (list (concat " " (propertize "New thread" 'face 'bold))
+                 (t3-code-environment-display-name t3-code-compose--environment)
                  (plist-get launch :projectName)
                  (let ((strategy (plist-get launch :workspaceStrategy)))
                    (pcase (plist-get strategy :type)

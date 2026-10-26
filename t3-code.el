@@ -421,8 +421,7 @@ prompt."
                               (lambda (entry) (not (eq (plist-get (cdr entry) :settled) t)))
                               (t3-code-shell-entries environment)))
                     (entries (sort entries (lambda (a b) (t3-code--rank< (cdr a) (cdr b)))))
-                    (label (or (t3-code-environment-label environment)
-                               (t3-code-environment-endpoint environment))))
+                    (label (t3-code-environment-display-name environment)))
                (mapcar
                 (lambda (candidate)
                   (let ((name (copy-sequence (car candidate))))
@@ -544,28 +543,47 @@ Outside a known project, offer settled threads of every project."
           (list :type "existing_worktree" :worktreePath (expand-file-name path))))
     (_ (list :type "root"))))
 
+(defun t3-code--read-project (environment)
+  "Pick a project across ENVIRONMENT's local and shared remote fleet."
+  (let ((candidates
+         (mapcan
+          (lambda (member)
+            (mapcar (lambda (project)
+                      (cons (format "%s · %s [%s]"
+                                    (t3-code-environment-display-name member)
+                                    (plist-get project :name)
+                                    (t3-code-environment-id member))
+                            (cons member project)))
+                    (plist-get (t3-code-environment-shell member) :projects)))
+          (t3-code-fleet-members environment))))
+    (unless candidates (user-error "No T3 projects are known yet"))
+    (cdr (assoc (completing-read "Project / environment: " candidates nil t)
+                candidates))))
+
 (defun t3-code-new-thread (&optional choose project environment)
   "Start a new thread in the current project.
 The input buffer opens first; \\[t3-code-compose-send] starts the thread
-with its first message.  With prefix argument CHOOSE, pick the project and
-model instead of inheriting them from the current thread.
+with its first message.  With prefix argument CHOOSE, pick the environment,
+project and model instead of inheriting them from the current thread.
 Noninteractively, PROJECT and ENVIRONMENT can supply a just-registered
 project before its shell update arrives."
   (interactive "P")
   (let* ((environment (or environment (t3-code--current-environment)))
+         (source-environment environment)
+         (context (if-let* ((known (or project
+                                      (and (not choose)
+                                           (t3-code--current-project environment)))))
+                      (cons environment known)
+                    (t3-code--read-project environment)))
+         (environment (car context))
+         (project (cdr context))
          (_ (unless (t3-code-capability-p environment :threadLifecycle)
               (user-error "Connected bridge cannot start threads")))
-         (source (cond ((derived-mode-p 't3-code-thread-mode) (t3-code-thread--thread))
+         (source (and (eq environment source-environment)
+                      (cond ((derived-mode-p 't3-code-thread-mode) (t3-code-thread--thread))
                        ((buffer-live-p t3-code-compose--origin-buffer)
                         (with-current-buffer t3-code-compose--origin-buffer
-                          (t3-code-thread--thread)))))
-         (projects (plist-get (t3-code-environment-shell environment) :projects))
-         (project (or project (and (not choose) (t3-code--current-project environment))
-                      (let ((names (mapcar (lambda (project)
-                                             (cons (plist-get project :name) project))
-                                           projects)))
-                        (unless names (user-error "No T3 projects are known yet"))
-                        (cdr (assoc (completing-read "Project: " names nil t) names)))))
+                          (t3-code-thread--thread))))))
          (siblings (sort (copy-sequence (plist-get project :threads)) #'t3-code--rank<))
          (template (or source (car siblings)))
          (workspace (t3-code--read-workspace project (plist-get template :branch)))

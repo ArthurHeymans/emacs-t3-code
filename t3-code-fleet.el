@@ -71,6 +71,16 @@
   (unless (t3-code-environment-parent environment)
     (pcase (t3-code-environment-state environment)
       ('ready
+       (when (and (plist-get (t3-code-environment-capabilities environment) :serverEnvironmentId)
+                  (not (gethash 'label-requested (t3-code-environment-cache environment))))
+         (puthash 'label-requested t (t3-code-environment-cache environment))
+         (t3-code-request
+          environment "server.getConfig" nil
+          (lambda (result error)
+            (unless error
+              (setf (t3-code-environment-label environment)
+                    (plist-get (plist-get result :environment) :label))
+              (t3-code-fleet--refresh-views environment)))))
        (when (and (t3-code-capability-p environment :environments)
                   (not (t3-code-environment-environments-reference environment)))
          (setf (t3-code-environment-environments-reference environment)
@@ -129,8 +139,7 @@
        (cons
         (list (list id :environment)
               (vector
-               (propertize (or (t3-code-environment-label environment) "Primary")
-                           'face 'bold)
+               (propertize (t3-code-environment-display-name environment) 'face 'bold)
                (symbol-name state) ""
                (propertize (t3-code-environment-endpoint environment) 'face 'shadow)
                "" "" ""
@@ -241,13 +250,19 @@
   "s" #'t3-code-fleet-toggle-settled
   "z" #'t3-code-fleet-toggle-snoozed)
 
+(defun t3-code-fleet--header-line ()
+  "Describe the fleet and explain unavailable shared remote discovery."
+  (concat " T3 environments · " (t3-code-environment-display-name t3-code-fleet--root)
+          (unless (t3-code-capability-p t3-code-fleet--root :environments)
+            (propertize " · Shared remotes unavailable (local admin connection required)"
+                        'face 'warning))))
+
 (define-derived-mode t3-code-fleet-mode t3-code-dashboard-mode "T3-Fleet"
   "Ledger of threads grouped by their owning local or remote environment."
   (setq t3-code-fleet--agent-menus (make-hash-table :test #'equal))
   ;; Fleet listeners belong to the shared store, not to this view.
   (remove-hook 'kill-buffer-hook #'t3-code-dashboard--cleanup t)
-  (setq header-line-format '(:eval (concat " T3 environments · "
-                                         (t3-code-environment-endpoint t3-code-fleet--root)))))
+  (setq header-line-format '(:eval (t3-code-fleet--header-line))))
 
 (defun t3-code-fleet (environment)
   "Display local and shared remote threads belonging to ENVIRONMENT."

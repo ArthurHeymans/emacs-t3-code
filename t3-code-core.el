@@ -179,6 +179,16 @@ of the final TRAMP method, so an SSH buffer can select an RPC mapping."
         (or (equal host system)
             (equal host (car (split-string system "\\.")))))))
 
+(defun t3-code-environment-display-name (environment)
+  "Describe ENVIRONMENT's machine, explicitly distinguishing local and remote."
+  (format "%s · %s"
+          (if (or (t3-code-environment-parent environment)
+                  (not (t3-code--local-host-p (t3-code--endpoint-host environment))))
+              "Remote" "Local")
+          (or (t3-code-environment-label environment)
+              (t3-code--endpoint-host environment)
+              (t3-code-environment-id environment))))
+
 (defun t3-code--same-host-p (left right)
   "Whether hosts LEFT and RIGHT match, allowing a short name for an FQDN."
   (when (and left right)
