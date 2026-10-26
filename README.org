@@ -74,6 +74,11 @@ TRAMP; the bridge runs locally.
 Hiding a conversation does not stop the agent. Command output appears in
 the chat, not a live terminal.
 
+In the ledger, =TAB= or the inline =Agents= button expands delegated sessions;
+they stay folded until you open them. Diff counts describe the workspace's
+changes (the current change for jj), not an individual thread's edits.
+Unavailable counts display =—=.
+
 * Browser-shared remotes
 
 On an updated local server, open the web UI through =localhost= or

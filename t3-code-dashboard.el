@@ -94,7 +94,6 @@
 (defconst t3-code-dashboard--settled-heading-id 't3-code-settled-heading)
 (defconst t3-code-dashboard--snoozed-heading-id 't3-code-snoozed-heading)
 (defconst t3-code-dashboard--truncated-heading-id 't3-code-truncated-heading)
-(defconst t3-code-dashboard--agents-heading-tag 't3-code-agents-heading)
 
 (defun t3-code-dashboard--header-line ()
   "Render the current dashboard connection state."
@@ -142,8 +141,8 @@
     ("idle" (propertize "○ idle" 'face 'shadow))
     (_ (propertize (or status "?") 'face 'shadow))))
 
-(defun t3-code-dashboard--thread-entry (project thread &optional depth)
-  "Create a tabulated entry for THREAD in PROJECT at nesting DEPTH."
+(defun t3-code-dashboard--thread-entry (project thread &optional depth agents)
+  "Create a tabulated entry for THREAD in PROJECT at nesting DEPTH with AGENTS."
   (let* ((thread-id (plist-get thread :id))
          (depth (or depth 0))
          (prefix (if (> depth 0) (concat (make-string depth ?\s) "↳ ") "")))
@@ -178,34 +177,38 @@
                        'face 't3-code-dashboard-model-face)
            (propertize (or (plist-get thread :worktree) "root")
                        'face 't3-code-dashboard-worktree-face)
-           (concat
-            (propertize (format "+%s" (or (plist-get thread :additions) 0))
-                        'face 'success)
-            "/"
-            (propertize (format "-%s" (or (plist-get thread :deletions) 0))
-                        'face 'error))))))
+           (if (and (numberp (plist-get thread :additions))
+                    (numberp (plist-get thread :deletions)))
+               (concat
+                (propertize (format "+%s" (plist-get thread :additions)) 'face 'success)
+                "/"
+                (propertize (format "-%s" (plist-get thread :deletions)) 'face 'error))
+             (propertize "—" 'face 'shadow))
+           (or agents "")))))
 
-(defun t3-code-dashboard--agents-heading-id (parent-id)
-  "Return the stable agents-menu ID below PARENT-ID."
-  (list t3-code-dashboard--agents-heading-tag parent-id))
+(declare-function t3-code-fleet-toggle "t3-code-fleet" ())
 
-(defun t3-code-dashboard--agents-heading-id-p (id)
-  "Return non-nil when ID identifies an agents menu."
-  (and (consp id) (eq (car id) t3-code-dashboard--agents-heading-tag)))
+(defun t3-code-dashboard--toggle-agents-button (&optional _button)
+  "Toggle the inline fold in its owning environment."
+  (interactive)
+  (if (derived-mode-p 't3-code-fleet-mode)
+      (t3-code-fleet-toggle)
+    (t3-code-dashboard-toggle-at-point)))
 
-(defun t3-code-dashboard--agents-heading-entry (parent-id count depth children)
-  "Create the agents menu below PARENT-ID for COUNT CHILDREN at DEPTH."
-  (let ((expanded (t3-code-dashboard--agents-open-p parent-id children)))
-    (list (t3-code-dashboard--agents-heading-id parent-id)
-          (vector
-           "" "" ""
-           (propertize
-            (format "%s%s Agents (%d)"
-                    (make-string (1+ depth) ?\s)
-                    (if expanded "▾" "▸") count)
-            'face 'font-lock-comment-face
-            'help-echo "RET: collapse/expand delegated agents")
-           "" "" "" ""))))
+(defvar-keymap t3-code-dashboard--agents-button-map
+  :parent button-map
+  "TAB" #'t3-code-dashboard--toggle-agents-button
+  "<tab>" #'t3-code-dashboard--toggle-agents-button)
+
+(defun t3-code-dashboard--agents-button (parent-id children)
+  "Create an inline fold button for PARENT-ID's CHILDREN."
+  (list (format "%s Agents (%d)"
+                (if (t3-code-dashboard--agents-open-p parent-id) "▾" "▸")
+                (length (gethash parent-id children)))
+        'face 'font-lock-comment-face
+        'help-echo "TAB or click: collapse/expand delegated agents"
+        'keymap t3-code-dashboard--agents-button-map
+        'action #'t3-code-dashboard--toggle-agents-button))
 
 (defun t3-code-dashboard--working-p (thread)
   "Whether THREAD is currently running or awaiting approval."
@@ -221,31 +224,24 @@
                        child children (cons id seen))))
                 (gethash id children)))))
 
-(defun t3-code-dashboard--agents-open-p (parent-id children)
-  "Whether PARENT-ID's agent menu is open, including its automatic state."
-  (let ((choice (gethash parent-id t3-code-dashboard--expanded-agents 'auto)))
-    (if (eq choice 'auto)
-        (seq-some (lambda (child)
-                    (or (t3-code-dashboard--working-p child)
-                        (t3-code-dashboard--working-descendant-p child children)))
-                  (gethash parent-id children))
-      (eq choice t))))
+(defun t3-code-dashboard--agents-open-p (parent-id)
+  "Whether PARENT-ID's agents were explicitly expanded."
+  (eq (gethash parent-id t3-code-dashboard--expanded-agents) t))
 
 (defun t3-code-dashboard--render-thread-tree (project thread children depth)
   "Render THREAD and its CHILDREN map under PROJECT at DEPTH."
   (let* ((thread-id (plist-get thread :id))
          (direct (gethash thread-id children))
-         (expanded (t3-code-dashboard--agents-open-p thread-id children)))
+         (expanded (t3-code-dashboard--agents-open-p thread-id)))
     (append
-     (list (t3-code-dashboard--thread-entry project thread depth))
-     (when direct
-       (cons
-        (t3-code-dashboard--agents-heading-entry thread-id (length direct) depth children)
-        (when expanded
-          (mapcan (lambda (child)
-                    (t3-code-dashboard--render-thread-tree
-                     project child children (1+ depth)))
-                  direct)))))))
+     (list (t3-code-dashboard--thread-entry
+            project thread depth
+            (when direct (t3-code-dashboard--agents-button thread-id children))))
+     (when (and direct expanded)
+       (mapcan (lambda (child)
+                 (t3-code-dashboard--render-thread-tree
+                  project child children (1+ depth)))
+               direct)))))
 
 (defun t3-code-dashboard--omission-text ()
   "Describe what the bridge omitted, e.g. \"2 projects and 1 settled thread\"."
@@ -268,7 +264,7 @@
           (format "⚠ %s omitted by bridge limits" (t3-code-dashboard--omission-text))
           'face 'warning
           'help-echo "Some projects or threads are omitted")
-         "" "" "" "" "" "" "")))
+         "" "" "" "" "" "" "" "")))
 
 (defun t3-code-dashboard--section-heading-entry (id label count collapsed key)
   "Create the heading ID of a collapsible LABEL section of COUNT rows.
@@ -279,7 +275,7 @@ COLLAPSED tells its state and KEY the command toggling it."
                      'face 'font-lock-keyword-face
                      'help-echo (format "RET or %s: collapse/expand %s threads"
                                         key (downcase label)))
-         "" "" "" "" "" "" "")))
+         "" "" "" "" "" "" "" "")))
 
 (defun t3-code-dashboard--snoozed-p (thread)
   "Whether THREAD is snoozed until a time still to come."
@@ -397,20 +393,27 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
    ((eq id t3-code-dashboard--snoozed-heading-id)
     (t3-code-dashboard-toggle-snoozed)
     t)
-   ((t3-code-dashboard--agents-heading-id-p id)
-    (t3-code-dashboard-toggle-agents (cadr id))
+   ((seq-some (lambda (project)
+                (seq-some (lambda (thread)
+                            (and (equal (plist-get thread :relationshipToParent) "subagent")
+                                 (equal (plist-get thread :parentThreadId) id)))
+                          (plist-get project :threads)))
+              t3-code-dashboard--projects)
+    (t3-code-dashboard-toggle-agents id)
     t)))
 
 (defun t3-code-dashboard-open-thread ()
   "Open the thread or toggle the section at point."
   (interactive)
   (if-let* ((id (t3-code-dashboard--row-id)))
-      (unless (t3-code-dashboard--toggle-id id)
-        (if (eq id t3-code-dashboard--truncated-heading-id)
-            (user-error "Some projects or threads are omitted by bridge limits")
-          (if-let* ((thread (t3-code-dashboard--find-thread id)))
-              (t3-code-thread-open t3-code-dashboard--environment thread)
-            (user-error "Thread is no longer present: %s" id))))
+      (if (button-at (point))
+          (push-button)
+        (unless (and (not (stringp id)) (t3-code-dashboard--toggle-id id))
+          (if (eq id t3-code-dashboard--truncated-heading-id)
+              (user-error "Some projects or threads are omitted by bridge limits")
+            (if-let* ((thread (t3-code-dashboard--find-thread id)))
+                (t3-code-thread-open t3-code-dashboard--environment thread)
+              (user-error "Thread is no longer present: %s" id)))))
     (user-error "No T3 thread at point")))
 
 (defun t3-code-dashboard-toggle-at-point ()
@@ -421,15 +424,8 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
 
 (defun t3-code-dashboard-toggle-agents (parent-id)
   "Toggle delegated agents below PARENT-ID."
-  (let ((children (make-hash-table :test #'equal)))
-    (dolist (project t3-code-dashboard--projects)
-      (dolist (thread (plist-get project :threads))
-        (when-let* ((parent (plist-get thread :parentThreadId)))
-          (when (equal (plist-get thread :relationshipToParent) "subagent")
-            (push thread (gethash parent children))))))
-    (puthash parent-id (if (t3-code-dashboard--agents-open-p parent-id children)
-                           :closed t)
-             t3-code-dashboard--expanded-agents))
+  (puthash parent-id (not (t3-code-dashboard--agents-open-p parent-id))
+           t3-code-dashboard--expanded-agents)
   (t3-code-dashboard--refresh))
 
 (defun t3-code-dashboard-toggle-settled ()
@@ -549,12 +545,13 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (setq tabulated-list-format
         [("Project" 36 nil)
          ("State" 8 nil)
-         ("Life" 13 nil)
+         ("Life" 10 nil)
          ("Thread" 36 nil)
          ("Provider" 10 nil)
-         ("Model" 18 nil)
-         ("Worktree" 16 nil)
-         ("Diff" 12 nil)]
+         ("Model" 16 nil)
+         ("Worktree" 8 nil)
+         ("Diff" 10 nil)
+         ("Agents" 14 nil)]
         tabulated-list-padding 2
         tabulated-list-sort-key nil)
   ;; Column names go in the buffer: the header line shows the connection

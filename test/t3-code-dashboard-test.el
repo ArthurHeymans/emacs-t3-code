@@ -150,16 +150,26 @@
                        (:id "other" :title "Other" :status "idle"
                         :parentThreadId nil :relationshipToParent nil)))))
     (t3-code-dashboard--refresh)
-    (let ((heading (t3-code-dashboard--agents-heading-id "parent")))
-      (should (equal (mapcar #'car tabulated-list-entries)
-                     (list "parent" heading "other")))
-      (should (t3-code-dashboard--goto-id heading))
-      (t3-code-dashboard-toggle-at-point)
-      (should (equal (mapcar #'car tabulated-list-entries)
-                     (list "parent" heading "agent" "other")))
-      (should (equal (substring-no-properties
-                      (aref (cadr (nth 2 tabulated-list-entries)) 3))
-                     " ↳ Agent")))))
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "other")))
+    (should (t3-code-dashboard--goto-id "parent"))
+    (should (string-match-p "▸ Agents (1)" (thing-at-point 'line t)))
+    ;; RET on the parent still opens the chat; TAB expands without a heading row.
+    (let (opened)
+      (cl-letf (((symbol-function 't3-code-thread-open)
+                 (lambda (_env thread) (setq opened (plist-get thread :id)))))
+        (t3-code-dashboard-open-thread))
+      (should (equal opened "parent")))
+    (t3-code-dashboard-toggle-at-point)
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "agent" "other")))
+    (should (equal (substring-no-properties
+                    (aref (cadr (nth 1 tabulated-list-entries)) 3))
+                   " ↳ Agent"))
+    (should (t3-code-dashboard--goto-id "parent"))
+    (search-forward "▾ Agents")
+    (backward-char)
+    (should (eq (key-binding (kbd "TAB")) #'t3-code-dashboard--toggle-agents-button))
+    (t3-code-dashboard-open-thread)
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "other")))))
 
 (ert-deftest t3-code-test-dashboard-shows-working-agent-under-settled-parent ()
   (with-temp-buffer
@@ -170,15 +180,21 @@
                        (:id "agent" :title "Agent" :status "running" :settled :false
                         :parentThreadId "parent" :relationshipToParent "subagent")))))
     (t3-code-dashboard--refresh)
-    (let ((heading (t3-code-dashboard--agents-heading-id "parent")))
-      (should (equal (mapcar #'car tabulated-list-entries)
-                     (list "parent" heading "agent")))
-      (should (string-match-p "▾ Agents" (buffer-string)))
-      (should (t3-code-dashboard--goto-id heading))
-      (t3-code-dashboard-toggle-at-point)
-      (should (equal (mapcar #'car tabulated-list-entries)
-                     (list "parent" heading)))
-      (should (string-match-p "▸ Agents" (buffer-string))))))
+    ;; A working descendant keeps the parent visible, but never unfolds it.
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent")))
+    (should (string-match-p "▸ Agents" (buffer-string)))
+    (should (t3-code-dashboard--goto-id "parent"))
+    (t3-code-dashboard-toggle-at-point)
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "agent")))
+    (t3-code-dashboard--on-shell-message
+     (list :kind "event" :payload (list :projects t3-code-dashboard--projects)))
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "agent")))))
+
+(ert-deftest t3-code-test-dashboard-distinguishes-unknown-and-empty-diffs ()
+  (let ((unknown (t3-code-dashboard--thread-entry nil '(:id "unknown")))
+        (empty (t3-code-dashboard--thread-entry nil '(:id "empty" :additions 0 :deletions 0))))
+    (should (equal (substring-no-properties (aref (cadr unknown) 7)) "—"))
+    (should (equal (substring-no-properties (aref (cadr empty) 7)) "+0/-0"))))
 
 (ert-deftest t3-code-test-dashboard-reopen-does-not-leak-reference ()
   (let* ((environment (t3-code-environment-create

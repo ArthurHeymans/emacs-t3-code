@@ -134,7 +134,8 @@
                (symbol-name state) ""
                (propertize (t3-code-environment-endpoint environment) 'face 'shadow)
                "" "" ""
-               (propertize (or (plist-get fatal :message) "") 'face 'error)))
+               (propertize (or (plist-get fatal :message) "") 'face 'error)
+               ""))
         (t3-code-fleet--call-in-environment
          environment
          (lambda ()
