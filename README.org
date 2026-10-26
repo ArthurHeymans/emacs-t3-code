@@ -91,9 +91,28 @@ and older servers still work for the primary, without shared discovery.
 Relay/DPoP connections are not shared.
 
 Remote chats and their input buffers use TRAMP workspace directories.
-For forwarded ports, different SSH hosts/users or containers, configure
-=t3-code-file-prefixes=: an HTTP endpoint alone cannot identify the correct
-filesystem transport.
+Opening T3 from a remote directory selects its connected host and project,
+retaining the directory's TRAMP method, user and hops. HTTP connections and
+file transports are independent: any installed TRAMP method can be used.
+For example, with =tramp-rpc= installed:
+
+#+begin_src emacs-lisp
+(setq t3-code-tramp-default-method "rpc")
+#+end_src
+
+This selects the transport when no invoking TRAMP directory has supplied one.
+Use =t3-code-file-prefixes= to override the transport or login per endpoint,
+or map a forwarded HTTP port to the actual filesystem host:
+
+#+begin_src emacs-lisp
+(setq t3-code-file-prefixes
+      '(("http://localhost:4000" . "/rpc:me@devbox:")))
+#+end_src
+
+An SSH CWD for the same login still selects that environment; its chat and
+input buffers use the configured RPC prefix. Different users, ports and hop
+chains remain distinct. An HTTP endpoint alone cannot identify aliases,
+forwarded ports or container filesystems reliably.
 
 * Development
 

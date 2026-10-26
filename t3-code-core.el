@@ -19,6 +19,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'url-parse)
+(eval-when-compile (require 'tramp))
 
 (defgroup t3-code nil
   "An Emacs client for T3 Code."
@@ -141,19 +142,22 @@ DIRECTORY controls where the bridge starts.  M0 accepts local directories only."
 ;;;; Server files
 
 (defcustom t3-code-tramp-default-method nil
-  "TRAMP method for the files of a T3 server on another host.
-Thread worktrees of a server whose endpoint names a remote host are
-reached as /METHOD:HOST:PATH.  Opening T3 from a TRAMP buffer on that
-host reuses the buffer's own prefix instead.  nil means use
-`tramp-default-method'."
+  "Default TRAMP transport for the files of a remote T3 server.
+Any installed TRAMP method works, including \"rpc\" from tramp-rpc.
+Thread worktrees are reached as /METHOD:HOST:PATH.  Opening T3 from a
+TRAMP buffer on that host reuses its method, user and hops instead.
+Nil means use `tramp-default-method'.  Use `t3-code-file-prefixes' to
+choose a different transport or login for an individual endpoint."
   :type '(choice (const :tag "Use tramp-default-method" nil) string)
   :group 't3-code)
 
 (defcustom t3-code-file-prefixes nil
   "Alist of (ENDPOINT . PREFIX) naming where a server's files live.
-PREFIX is a TRAMP prefix such as \"/ssh:devbox:\", or \"\" for local
-files.  Use it for a remote server reached through a forwarded local
-port, whose endpoint looks local."
+PREFIX is a TRAMP prefix such as \"/rpc:me@devbox:\", or \"\" for local
+files.  It overrides the inferred host, login and transport, including
+for forwarded ports whose HTTP endpoints look local.
+CWD routing matches the mapped host, user, port and hops independently
+of the final TRAMP method, so an SSH buffer can select an RPC mapping."
   :type '(alist :key-type string :value-type string)
   :group 't3-code)
 
@@ -198,24 +202,40 @@ port, whose endpoint looks local."
 
 (defun t3-code-note-directory (environment directory)
   "Remember the TRAMP prefix of DIRECTORY when it reaches ENVIRONMENT's host."
-  (when-let* ((prefix (file-remote-p directory))
+  (when-let* (((file-remote-p directory))
               ((not (assoc (t3-code-environment-endpoint environment)
                            t3-code-file-prefixes)))
               ((t3-code--same-host-p (file-remote-p directory 'host)
                                      (t3-code--endpoint-host environment))))
-    (setf (t3-code-environment-remote-prefix environment) prefix)))
+    ;; `file-remote-p' normalizes away ad-hoc hops; keep the written prefix.
+    (setf (t3-code-environment-remote-prefix environment)
+          (substring directory 0 (- (length directory) (length (file-local-name directory)))))))
 
 (defun t3-code-local-file (environment path)
   "Return server PATH of ENVIRONMENT as an Emacs file name, or nil."
   (when (and (stringp path) (file-name-absolute-p path) (not (file-remote-p path)))
     (concat (t3-code-file-prefix environment) path)))
 
+(defun t3-code--same-remote-location-p (left right)
+  "Whether remote names LEFT and RIGHT identify the same filesystem login.
+The final transport method is independent of T3's environment selection.
+Users, domains, ports and hop chains must still match."
+  (require 'tramp)
+  (let ((left (tramp-dissect-file-name left t))
+        (right (tramp-dissect-file-name right t)))
+    (and (t3-code--same-host-p (tramp-file-name-host left) (tramp-file-name-host right))
+         (seq-every-p (lambda (field) (equal (funcall field left) (funcall field right)))
+                      '(tramp-file-name-user tramp-file-name-domain
+                        tramp-file-name-port tramp-file-name-hop)))))
+
 (defun t3-code-server-path (environment file)
   "Return Emacs FILE as a path on ENVIRONMENT's server, or nil if elsewhere."
   (let ((prefix (t3-code-file-prefix environment))
-        (file (expand-file-name file)))
+        (file (let ((tramp-show-ad-hoc-proxies t)) (expand-file-name file))))
     (cond ((null prefix) (unless (file-remote-p file) file))
-          ((equal (file-remote-p file) (file-remote-p prefix)) (file-local-name file)))))
+          ((and (file-remote-p file)
+                (t3-code--same-remote-location-p file prefix))
+           (file-local-name file)))))
 
 (defun t3-code--next-id (environment prefix)
   "Return a stable next ID in ENVIRONMENT with PREFIX."
