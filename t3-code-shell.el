@@ -72,8 +72,12 @@ not scan the buffer list.")
 
 (defun t3-code-shell-find-thread (environment thread-id)
   "Return (PROJECT . THREAD) for THREAD-ID in ENVIRONMENT, if known."
-  (seq-find (lambda (entry) (equal (plist-get (cdr entry) :id) thread-id))
-            (t3-code-shell-entries environment)))
+  (seq-some (lambda (project)
+              (when-let* ((thread (seq-find
+                                  (lambda (thread) (equal (plist-get thread :id) thread-id))
+                                  (plist-get project :threads))))
+                (cons project thread)))
+            (plist-get (t3-code-environment-shell environment) :projects)))
 
 (defun t3-code-shell-find-project (environment project-id)
   "Return the normalized project PROJECT-ID in ENVIRONMENT."
@@ -112,9 +116,14 @@ above that Emacs project/repository boundary.  Paths are server-side."
 
 (defun t3-code-shell-counts (environment)
   "Return (WORKING . UNSEEN) thread counts for ENVIRONMENT."
-  (let ((threads (mapcar #'cdr (t3-code-shell-entries environment))))
-    (cons (seq-count #'t3-code-shell-working-p threads)
-          (seq-count (lambda (thread) (eq (plist-get thread :unread) t)) threads))))
+  ;; Headers call this during redisplay: do not materialize project/thread
+  ;; pairs and a second list of all threads just to count them.
+  (let ((working 0) (unseen 0))
+    (dolist (project (plist-get (t3-code-environment-shell environment) :projects))
+      (dolist (thread (plist-get project :threads))
+        (when (t3-code-shell-working-p thread) (cl-incf working))
+        (when (eq (plist-get thread :unread) t) (cl-incf unseen))))
+    (cons working unseen)))
 
 (declare-function t3-code-ledger "t3-code" (&optional environment))
 (declare-function notifications-notify "notifications" (&rest params))

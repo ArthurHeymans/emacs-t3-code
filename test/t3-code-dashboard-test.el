@@ -371,5 +371,23 @@
       (t3-code-dashboard--refresh)
       (should (assoc "busy" tabulated-list-entries)))))
 
+(ert-deftest t3-code-test-dashboard-agent-grouping-is-linear-and-ordered ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (let* ((agents (cl-loop for i below 1000 collect
+                            (list :id (format "child%d" i) :status "idle"
+                                  :relationshipToParent "subagent"
+                                  :parentThreadId "parent")))
+           (threads (cons '(:id "parent" :status "idle") agents)))
+      (setq t3-code-dashboard--projects (list (list :id "p" :threads threads)))
+      (puthash "parent" t t3-code-dashboard--expanded-agents)
+      (let* ((before (car (memory-use-counts)))
+             (rows (t3-code-dashboard--entries))
+             (conses (- (car (memory-use-counts)) before)))
+        (should (< conses 100000))
+        (should (equal (mapcar #'car rows)
+                       (mapcar (lambda (thread) (plist-get thread :id)) threads)))
+        (should (= (length threads) 1001))))))
+
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here
