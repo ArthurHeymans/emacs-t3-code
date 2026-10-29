@@ -195,6 +195,12 @@
   (interactive)
   (t3-code-fleet--action #'t3-code-dashboard-toggle-at-point))
 
+(defun t3-code-fleet-toggle-working ()
+  "Toggle working sections in the fleet."
+  (interactive)
+  (setq t3-code-dashboard--working-collapsed (not t3-code-dashboard--working-collapsed))
+  (t3-code-fleet--refresh))
+
 (defun t3-code-fleet-toggle-settled ()
   "Toggle settled sections in the fleet."
   (interactive)
@@ -247,8 +253,12 @@
   "N" #'t3-code-fleet-new-thread
   "C-c C-n" #'t3-code-fleet-new-thread
   "g" #'t3-code-fleet-reconnect
+  "w" #'t3-code-fleet-toggle-working
   "s" #'t3-code-fleet-toggle-settled
   "z" #'t3-code-fleet-toggle-snoozed)
+
+;; Override the inherited dashboard command when reloading an existing map too.
+(keymap-set t3-code-fleet-mode-map "w" #'t3-code-fleet-toggle-working)
 
 (defun t3-code-fleet--header-line ()
   "Describe the fleet and explain unavailable shared remote discovery."
