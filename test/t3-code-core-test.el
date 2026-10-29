@@ -337,10 +337,31 @@
           (process-put process 't3-code-environment environment)
           (let ((before (car (memory-use-counts))))
             (dotimes (_ 1000) (t3-code--process-filter process "x"))
+            ;; Measure the production bytecode, not interpreter frame overhead.
             ;; The old per-read mapcar allocated over 500,000 conses.
-            (should (< (- (car (memory-use-counts)) before) 50000)))
+            (when (byte-code-function-p (symbol-function 't3-code--process-filter))
+              (should (< (- (car (memory-use-counts)) before) 50000))))
           (should (= (process-get process 't3-code-partial-output-bytes) 1000)))
       (delete-process process))))
+
+(ert-deftest t3-code-test-partial-output-limit-after-newline-with-existing-chunks ()
+  (dolist (chunks '(nil ("\"event\"" "{\"kind\":")))
+    (let* ((t3-code-max-line-bytes 20)
+           (process (make-pipe-process :name "t3-newline-limit" :noquery t))
+           (environment (t3-code-environment-create :id "test" :process process)))
+      (unwind-protect
+          (progn
+            (process-put process 't3-code-environment environment)
+            ;; Also cover reloading with a partial valid record but no count.
+            (process-put process 't3-code-partial-output-chunks chunks)
+            (cl-letf (((symbol-function 't3-code--dispatch) #'ignore))
+              (t3-code--process-filter
+               process (concat (if chunks "}\n" "\n") (make-string 11 ?é))))
+            (should (= (process-get process 't3-code-partial-output-bytes) 22))
+            (should-not (process-live-p process))
+            (should (string-match-p "oversized partial"
+                                    (car (t3-code-environment-diagnostics environment)))))
+        (delete-process process)))))
 
 (provide 't3-code-core-test)
 ;;; t3-code-core-test.el ends here

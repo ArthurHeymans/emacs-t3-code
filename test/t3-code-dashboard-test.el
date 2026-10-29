@@ -384,7 +384,10 @@
       (let* ((before (car (memory-use-counts)))
              (rows (t3-code-dashboard--entries))
              (conses (- (car (memory-use-counts)) before)))
-        (should (< conses 100000))
+        ;; Absolute bounds target bytecode; the interpreter allocates extra
+        ;; evaluation frames.  Keep the ordering checks in both test workflows.
+        (when (byte-code-function-p (symbol-function 't3-code-dashboard--entries))
+          (should (< conses 100000)))
         (should (equal (mapcar #'car rows)
                        (mapcar (lambda (thread) (plist-get thread :id)) threads)))
         (should (= (length threads) 1001))))))

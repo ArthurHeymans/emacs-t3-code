@@ -1074,7 +1074,9 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
       (let* ((before (car (memory-use-counts)))
              (nodes (t3-code-thread--grouped-children items nil))
              (conses (- (car (memory-use-counts)) before)))
-        (should (< conses 50000))
+        ;; Interpreted evaluation has allocation overhead absent in production.
+        (when (byte-code-function-p (symbol-function 't3-code-thread--grouped-children))
+          (should (< conses 50000)))
         (should (= (length nodes) 1))
         (should (equal (plist-get (car nodes) :children) original))
         (should (equal items original))))))
@@ -1093,6 +1095,48 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
       (should (eq t3-code-thread--rendered-payload t3-code-thread--payload))
       (should (equal (plist-get (nth 2 (plist-get first :items)) :text)
                      "Folding now works.")))))
+
+(ert-deftest t3-code-test-thread-optimistic-modes-preserve-rendered-payload ()
+  (dolist (case '((t3-code-thread-set-runtime-mode "thread.runtimeMode.set"
+                  :runtimeMode "full-access" "auto")
+                 (t3-code-thread-set-interaction-mode "thread.interactionMode.set"
+                  :interactionMode "plan" "default")))
+    ;; A missing field exercises plist-put's returned, newly allocated plist.
+    (dolist (present '(nil t))
+      (with-temp-buffer
+        (t3-code-thread-mode)
+        (let* ((field (nth 2 case))
+               (value (nth 3 case))
+               (thread (append (list :id "t") (when present (list field (nth 4 case)))))
+               (items (list (list :id "answer" :type "assistant_message" :text "Hello")))
+               (payload (list :thread thread :items items)))
+          (setq t3-code-thread--payload payload
+                t3-code-thread--thread-id "t")
+          (t3-code-thread--refresh)
+          (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) value))
+                    ((symbol-function 't3-code-thread--request)
+                     (lambda (operation input _message callback &rest _)
+                       (should (equal operation (nth 1 case)))
+                       (should (equal (plist-get input field) value))
+                       (funcall callback nil))))
+            (funcall (car case)))
+          (should (equal (plist-get (t3-code-thread--thread) field) value))
+          (should (equal (plist-get thread field) (when present (nth 4 case))))
+          (should (eq t3-code-thread--rendered-payload payload))
+          (should-not (eq t3-code-thread--payload payload))
+          (should-not (eq (t3-code-thread--thread) thread))
+          (should (eq (plist-get t3-code-thread--payload :items) items))
+          (should-not (equal t3-code-thread--payload t3-code-thread--rendered-payload)))))))
+
+(ert-deftest t3-code-test-thread-activity-phase-uses-last-streaming-item ()
+  (let ((reasoning '(:id "r" :type "reasoning" :streaming t))
+        (tool '(:id "t" :type "command_execution" :streaming t)))
+    (should (equal (t3-code-thread-activity-phase
+                    (list :thread '(:id "thread") :items (list tool reasoning)))
+                   "thinking"))
+    (should (equal (t3-code-thread-activity-phase
+                    (list :thread '(:id "thread") :items (list reasoning tool)))
+                   "replying"))))
 
 (provide 't3-code-thread-test)
 ;;; t3-code-thread-test.el ends here

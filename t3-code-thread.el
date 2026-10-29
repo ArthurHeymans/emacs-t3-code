@@ -1353,6 +1353,13 @@ See `t3-code-thread--with-effort' for PICK."
 
 ;;;; Modes and lifecycle
 
+(defun t3-code-thread--set-thread-field (field value)
+  "Set optimistic thread FIELD to VALUE without mutating a rendered payload.
+Copy only the payload and thread plists; timeline items remain shared."
+  (setq t3-code-thread--payload
+        (plist-put (copy-sequence t3-code-thread--payload) :thread
+                   (plist-put (copy-sequence (t3-code-thread--thread)) field value))))
+
 (defun t3-code-thread-set-runtime-mode ()
   "Choose and set the thread runtime mode."
   (interactive)
@@ -1367,8 +1374,8 @@ See `t3-code-thread--with-effort' for PICK."
            :runtimeMode mode)
      (format "T3 runtime mode: %s" mode)
      (lambda (_result)
-       (when-let* ((thread (t3-code-thread--thread)))
-         (plist-put thread :runtimeMode mode))))))
+       (when (t3-code-thread--thread)
+         (t3-code-thread--set-thread-field :runtimeMode mode))))))
 
 (defun t3-code-thread-set-interaction-mode ()
   "Choose and set default or plan interaction mode."
@@ -1383,8 +1390,8 @@ See `t3-code-thread--with-effort' for PICK."
            :interactionMode mode)
      (format "T3 interaction mode: %s" mode)
      (lambda (_result)
-       (when-let* ((thread (t3-code-thread--thread)))
-         (plist-put thread :interactionMode mode))))))
+       (when (t3-code-thread--thread)
+         (t3-code-thread--set-thread-field :interactionMode mode))))))
 
 (defun t3-code-thread-settle ()
   "Move this thread to the settled section."
