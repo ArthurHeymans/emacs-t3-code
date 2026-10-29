@@ -287,5 +287,81 @@
     (should (equal (t3-code-server-path environment "/ssh:jump|rpc:me@devbox:/srv/app/")
                    "/srv/app/"))))
 
+(ert-deftest t3-code-test-partial-output-count-resets-at-newlines ()
+  (let* ((process (make-pipe-process :name "t3-partial-count" :noquery t))
+         (environment (t3-code-environment-create :id "test" :process process))
+         messages)
+    (unwind-protect
+        (progn
+          (process-put process 't3-code-environment environment)
+          (cl-letf (((symbol-function 't3-code--dispatch)
+                     (lambda (_environment message) (push message messages))))
+            (t3-code--process-filter process "{\"kind\":\"event\"")
+            (should (= (process-get process 't3-code-partial-output-bytes) 15))
+            (t3-code--process-filter process "}\n\né")
+            (should (equal messages '((:kind "event"))))
+            (should (= (process-get process 't3-code-partial-output-bytes) 2))
+            (t3-code--process-filter process "x")
+            (should (= (process-get process 't3-code-partial-output-bytes) 3))
+            (t3-code--process-filter process "\n")
+            (should (= (process-get process 't3-code-partial-output-bytes) 0))
+            (should-not (process-get process 't3-code-partial-output-chunks))))
+      (delete-process process))))
+
+(ert-deftest t3-code-test-partial-output-limit-counts-bytes-and-existing-chunks ()
+  (let* ((t3-code-max-line-bytes 6)
+         (process (make-pipe-process :name "t3-partial-limit" :noquery t))
+         (environment (t3-code-environment-create :id "test" :process process)))
+    (unwind-protect
+        (progn
+          (process-put process 't3-code-environment environment)
+          ;; A bridge already running when the package is reloaded has chunks
+          ;; but no byte counter.  Seed its count once, without losing bytes.
+          (process-put process 't3-code-partial-output-chunks '("é" "a"))
+          (t3-code--process-filter process "z")
+          (should (= (process-get process 't3-code-partial-output-bytes) 4))
+          (t3-code--process-filter process "é")
+          (should (process-live-p process))
+          (should (= (process-get process 't3-code-partial-output-bytes) 6))
+          (t3-code--process-filter process "é")
+          (should-not (process-live-p process))
+          (should (string-match-p "oversized partial"
+                                  (car (t3-code-environment-diagnostics environment)))))
+      (delete-process process))))
+
+(ert-deftest t3-code-test-partial-output-allocates-linearly ()
+  (let* ((process (make-pipe-process :name "t3-partial-allocation" :noquery t))
+         (environment (t3-code-environment-create :id "test" :process process)))
+    (unwind-protect
+        (progn
+          (process-put process 't3-code-environment environment)
+          (let ((before (car (memory-use-counts))))
+            (dotimes (_ 1000) (t3-code--process-filter process "x"))
+            ;; Measure the production bytecode, not interpreter frame overhead.
+            ;; The old per-read mapcar allocated over 500,000 conses.
+            (when (byte-code-function-p (symbol-function 't3-code--process-filter))
+              (should (< (- (car (memory-use-counts)) before) 50000))))
+          (should (= (process-get process 't3-code-partial-output-bytes) 1000)))
+      (delete-process process))))
+
+(ert-deftest t3-code-test-partial-output-limit-after-newline-with-existing-chunks ()
+  (dolist (chunks '(nil ("\"event\"" "{\"kind\":")))
+    (let* ((t3-code-max-line-bytes 20)
+           (process (make-pipe-process :name "t3-newline-limit" :noquery t))
+           (environment (t3-code-environment-create :id "test" :process process)))
+      (unwind-protect
+          (progn
+            (process-put process 't3-code-environment environment)
+            ;; Also cover reloading with a partial valid record but no count.
+            (process-put process 't3-code-partial-output-chunks chunks)
+            (cl-letf (((symbol-function 't3-code--dispatch) #'ignore))
+              (t3-code--process-filter
+               process (concat (if chunks "}\n" "\n") (make-string 11 ?é))))
+            (should (= (process-get process 't3-code-partial-output-bytes) 22))
+            (should-not (process-live-p process))
+            (should (string-match-p "oversized partial"
+                                    (car (t3-code-environment-diagnostics environment)))))
+        (delete-process process)))))
+
 (provide 't3-code-core-test)
 ;;; t3-code-core-test.el ends here

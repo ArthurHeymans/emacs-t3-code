@@ -91,6 +91,12 @@ and its latest stretch names what is happening now."
 (defvar-local t3-code-thread--older-state nil
   "History paging state: nil, `loading', or `exhausted'.")
 (defvar-local t3-code-thread--rendered-older nil)
+(defvar-local t3-code-thread--node-cache nil
+  "Latest item snapshots and rendered nodes, keyed by item ID.
+Only items used by the last render are retained; streaming versions replace
+rather than accumulate.  Each chat owns its cache.")
+(defvar t3-code-thread--next-node-cache nil
+  "Cache being populated during one render, or nil outside rendering.")
 
 (defun t3-code-thread--preview (text &optional width)
   "Return a bounded single-line preview of TEXT, at most WIDTH characters."
@@ -115,12 +121,14 @@ and its latest stretch names what is happening now."
 
 (defun t3-code-thread--items ()
   "Return loaded history followed by the live window, without duplicates."
-  (let* ((live (plist-get t3-code-thread--payload :items))
-         (ids (make-hash-table :test #'equal)))
-    (dolist (item live) (puthash (plist-get item :id) t ids))
-    (append (seq-remove (lambda (item) (gethash (plist-get item :id) ids))
-                        t3-code-thread--older-items)
-            live)))
+  (let ((live (plist-get t3-code-thread--payload :items)))
+    (if (null t3-code-thread--older-items)
+        live
+      (let ((ids (make-hash-table :test #'equal)))
+        (dolist (item live) (puthash (plist-get item :id) t ids))
+        (append (seq-remove (lambda (item) (gethash (plist-get item :id) ids))
+                            t3-code-thread--older-items)
+                live)))))
 
 (defun t3-code-thread--status-suffix (item)
   "Return a heading suffix describing ITEM's live state."
@@ -176,6 +184,25 @@ and its latest stretch names what is happening now."
       (_ (t3-code-markdown-fontify body 'markdown)))))
 
 (defun t3-code-thread--item-node (item)
+  "Return the cached section node for ITEM, rebuilding only when it changes."
+  (let* ((id (plist-get item :id))
+         (options (list t3-code-thinking-display
+                        (t3-code-markdown--resolve-mode 'markdown)
+                        t3-code-markdown-hide-markup t3-code-markdown-max-chars))
+         (cached (and t3-code-thread--node-cache
+                      (gethash id t3-code-thread--node-cache)))
+         (entry (if (and cached (equal item (nth 0 cached))
+                         (equal options (nth 1 cached)))
+                    cached
+                  ;; Snapshot just this item, so even local in-place edits are
+                  ;; detected without copying the whole payload each render.
+                  (list (copy-tree item) options
+                        (t3-code-thread--build-item-node item)))))
+    (when t3-code-thread--next-node-cache
+      (puthash id entry t3-code-thread--next-node-cache))
+    (nth 2 entry)))
+
+(defun t3-code-thread--build-item-node (item)
   "Make a section node for normalized ITEM inside a turn."
   (let* ((type (plist-get item :type))
          (id (plist-get item :id))
@@ -252,7 +279,7 @@ and its latest stretch names what is happening now."
                              (format "  [%s]" status)))
           :setext t :face 't3-code-turn-heading-face
           :open (eq t3-code-thread--view 'conversation)
-          :body (and prompt (t3-code-markdown-fontify prompt 'markdown))
+          :body (and prompt (plist-get (t3-code-thread--item-node user) :body))
           :children
           (when rest
             (list (list :key (concat "assistant:" run-id)
@@ -339,19 +366,18 @@ grouped under one closed \"Worked\" section, as in T3 Code."
 Messages, plans, errors and pending requests stay visible between closed
 groups of two or more consecutive work items.  When ACTIVE, the last
 group names its latest activity."
-  (let* ((segments
-          ;; Split into maximal runs of work and single visible items.
-          (nreverse
-           (seq-reduce (lambda (segments item)
-                         (if (and (t3-code-thread--work-p item)
-                                  (eq (car (car segments)) 'work))
-                             (cons (cons 'work (append (cdr (car segments)) (list item)))
-                                   (cdr segments))
-                           (cons (cons (if (t3-code-thread--work-p item) 'work 'item)
-                                       (list item))
-                                 segments)))
-                       items nil)))
-         (last (car (last segments))))
+  (let (segments last)
+    ;; Accumulate each segment backwards, then reverse once.  Appending each
+    ;; item to its growing segment allocated O(n^2) conses for long tool runs.
+    (dolist (item items)
+      (let ((work (t3-code-thread--work-p item)))
+        (if (and work (eq (caar segments) 'work))
+            (push item (cdar segments))
+          (push (list (if work 'work 'item) item) segments))))
+    (setq segments (nreverse segments))
+    (dolist (segment segments)
+      (setcdr segment (nreverse (cdr segment))))
+    (setq last (car (last segments)))
     (mapcan (lambda (segment)
               (let ((members (cdr segment)))
                 (if (or (eq (car segment) 'item) (null (cdr members)))
@@ -465,6 +491,12 @@ group names its latest activity."
 
 (defun t3-code-thread--render-rows ()
   "Build visible headings and bounded body rows for the current payload."
+  (let ((t3-code-thread--next-node-cache (make-hash-table :test #'equal)))
+    (prog1 (t3-code-thread--build-rows)
+      (setq t3-code-thread--node-cache t3-code-thread--next-node-cache))))
+
+(defun t3-code-thread--build-rows ()
+  "Build rows, populating `t3-code-thread--next-node-cache' for used items."
   (let* ((payload t3-code-thread--payload)
          (notice (cond
                   ((null payload)
@@ -677,7 +709,9 @@ displayed again.  nil renders every update at once."
             (set-window-point window (t3-code-thread--restore-anchor (nth 2 entry)))
             (set-window-start window (t3-code-thread--restore-anchor (nth 1 entry)) t))))
       (when changed
-        (setq t3-code-thread--rendered-payload (copy-tree t3-code-thread--payload)
+        ;; Bridge payloads are immutable replacement projections.  Keep the
+        ;; rendered reference, not a second deep copy of every item plist.
+        (setq t3-code-thread--rendered-payload t3-code-thread--payload
               t3-code-thread--unseen (if (seq-some (lambda (entry) (nth 3 entry)) windows)
                                          0 (1+ t3-code-thread--unseen))))
       (setq t3-code-thread--rendered-error t3-code-thread--stream-error

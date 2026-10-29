@@ -361,8 +361,19 @@ Users, domains, ports and hop chains must still match."
     (if (not (eq process (t3-code-environment-process environment)))
         (t3-code--diagnose environment "Ignored output from stale bridge process")
       (process-put process 't3-code-partial-output-chunks (cdr result))
-      ;; Sum the chunks: concatenating them per read is quadratic in a long line.
-      (when (> (apply #'+ (mapcar #'string-bytes (cdr result))) t3-code-max-line-bytes)
+      ;; Track the unfinished line incrementally.  Re-summing every previous
+      ;; chunk per read was still quadratic for a fragmented long record.
+      (process-put process 't3-code-partial-output-bytes
+                   (if (string-search "\n" output)
+                       ;; After a newline the remainder is at most one chunk.
+                       (if (cdr result) (string-bytes (cadr result)) 0)
+                     (+ (or (process-get process 't3-code-partial-output-bytes)
+                            ;; Also support a process created before reloading
+                            ;; this version, with chunks but no cached count.
+                            (cl-loop for chunk in chunks sum (string-bytes chunk)))
+                        (string-bytes output))))
+      (when (> (process-get process 't3-code-partial-output-bytes)
+               t3-code-max-line-bytes)
         (t3-code--diagnose environment "Rejected oversized partial bridge line")
         (delete-process process))
       (dolist (line (car result))

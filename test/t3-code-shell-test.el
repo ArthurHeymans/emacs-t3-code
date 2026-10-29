@@ -87,5 +87,44 @@
     (should (= (length requests) 1))
     (should (equal (plist-get (car requests) :visitedAt) "2999-01-01T00:00:00.000Z"))))
 
+(ert-deftest t3-code-test-shell-queries-do-not-materialize-all-entries ()
+  (let* ((first (list :id "first" :status "running" :unread t))
+         (last '(:id "last" :status "waiting-approval" :unread :false))
+         (project (list :id "p2" :threads (list last)))
+         (environment
+          (t3-code-environment-create
+           :id "queries" :shell
+           (list :projects (list (list :id "empty")
+                                 (list :id "p1" :threads (list first)) project)))))
+    (cl-letf (((symbol-function 't3-code-shell-entries)
+               (lambda (&rest _) (ert-fail "Shell query materialized all entries"))))
+      (let ((found (t3-code-shell-find-thread environment "last")))
+        (should (eq (car found) project))
+        (should (eq (cdr found) last)))
+      (should-not (t3-code-shell-find-thread environment "missing"))
+      (should (equal (t3-code-shell-counts environment) '(2 . 1)))
+      ;; Visits clear unread in place: count the current data, not stale totals.
+      (setf (plist-get first :unread) :false)
+      (should (equal (t3-code-shell-counts environment) '(2 . 0))))))
+
+(ert-deftest t3-code-test-shell-queries-avoid-per-thread-consing ()
+  (let ((environment
+         (t3-code-environment-create
+          :shell (list :projects
+                       (list (list :threads
+                                   (cl-loop for i below 2000 collect
+                                            (list :id (number-to-string i)
+                                                  :status "idle"))))))))
+    (let* ((before (car (memory-use-counts)))
+           (entry (t3-code-shell-find-thread environment "0"))
+           (counts (t3-code-shell-counts environment))
+           (conses (- (car (memory-use-counts)) before)))
+      (should (equal (plist-get (cdr entry) :id) "0"))
+      (should (equal counts '(0 . 0)))
+      ;; Source-loaded seq predicates allocate interpreter frames per thread.
+      (when (and (byte-code-function-p (symbol-function 't3-code-shell-find-thread))
+                 (byte-code-function-p (symbol-function 't3-code-shell-counts)))
+        (should (< conses 2000))))))
+
 (provide 't3-code-shell-test)
 ;;; t3-code-shell-test.el ends here

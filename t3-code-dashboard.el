@@ -306,10 +306,10 @@ COLLAPSED tells its state and KEY the command toggling it."
       (dolist (thread (plist-get project :threads))
         (when (and (equal (plist-get thread :relationshipToParent) "subagent")
                    (plist-get thread :parentThreadId))
-          (let ((parent-id (plist-get thread :parentThreadId)))
-            (puthash parent-id
-                     (append (gethash parent-id children) (list thread))
-                     children)))))
+          (push thread (gethash (plist-get thread :parentThreadId) children)))))
+    ;; Keep sibling order without copying an ever-growing list per child.
+    (maphash (lambda (parent members) (puthash parent (nreverse members) children))
+             children)
     (dolist (project t3-code-dashboard--projects)
       (dolist (thread (plist-get project :threads))
         (unless (equal (plist-get thread :relationshipToParent) "subagent")

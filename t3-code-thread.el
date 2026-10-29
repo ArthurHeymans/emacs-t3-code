@@ -156,8 +156,11 @@ INPUT-BUFFER may be nil.  Handlers should be idempotent.")
 (defun t3-code-thread-activity-phase (payload)
   "Return the activity phase described by thread PAYLOAD."
   (let* ((thread (plist-get payload :thread))
-         (streaming (seq-find (lambda (item) (eq (plist-get item :streaming) t))
-                              (reverse (plist-get payload :items)))))
+         streaming)
+    ;; Items arrive chronologically.  Remember the last streaming one without
+    ;; allocating a reversed timeline on every update, including hidden chats.
+    (dolist (item (plist-get payload :items))
+      (when (eq (plist-get item :streaming) t) (setq streaming item)))
     (cond ((null thread) "idle")
           ((equal (plist-get thread :status) "waiting-approval") "waiting")
           ((and streaming (equal (plist-get streaming :type) "reasoning")) "thinking")
@@ -1350,6 +1353,13 @@ See `t3-code-thread--with-effort' for PICK."
 
 ;;;; Modes and lifecycle
 
+(defun t3-code-thread--set-thread-field (field value)
+  "Set optimistic thread FIELD to VALUE without mutating a rendered payload.
+Copy only the payload and thread plists; timeline items remain shared."
+  (setq t3-code-thread--payload
+        (plist-put (copy-sequence t3-code-thread--payload) :thread
+                   (plist-put (copy-sequence (t3-code-thread--thread)) field value))))
+
 (defun t3-code-thread-set-runtime-mode ()
   "Choose and set the thread runtime mode."
   (interactive)
@@ -1364,8 +1374,8 @@ See `t3-code-thread--with-effort' for PICK."
            :runtimeMode mode)
      (format "T3 runtime mode: %s" mode)
      (lambda (_result)
-       (when-let* ((thread (t3-code-thread--thread)))
-         (plist-put thread :runtimeMode mode))))))
+       (when (t3-code-thread--thread)
+         (t3-code-thread--set-thread-field :runtimeMode mode))))))
 
 (defun t3-code-thread-set-interaction-mode ()
   "Choose and set default or plan interaction mode."
@@ -1380,8 +1390,8 @@ See `t3-code-thread--with-effort' for PICK."
            :interactionMode mode)
      (format "T3 interaction mode: %s" mode)
      (lambda (_result)
-       (when-let* ((thread (t3-code-thread--thread)))
-         (plist-put thread :interactionMode mode))))))
+       (when (t3-code-thread--thread)
+         (t3-code-thread--set-thread-field :interactionMode mode))))))
 
 (defun t3-code-thread-settle ()
   "Move this thread to the settled section."
