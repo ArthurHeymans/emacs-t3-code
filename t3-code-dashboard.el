@@ -18,6 +18,13 @@
   :type 'boolean
   :group 't3-code)
 
+(defcustom t3-code-dashboard-collapse-working t
+  "Whether new dashboards initially hide running threads in a Working section.
+Threads needing approval remain in the main section.
+Failures do not override settled or snoozed state."
+  :type 'boolean
+  :group 't3-code)
+
 (defface t3-code-dashboard-running-face
   '((((class color) (background dark)) :foreground "#79a8ff" :weight bold)
     (((class color) (background light)) :foreground "#1d4ed8" :weight bold)
@@ -89,8 +96,10 @@
 (defvar-local t3-code-dashboard--omitted-project-count nil)
 (defvar-local t3-code-dashboard--settled-collapsed nil)
 (defvar-local t3-code-dashboard--snoozed-collapsed t)
+(defvar-local t3-code-dashboard--working-collapsed nil)
 (defvar-local t3-code-dashboard--expanded-agents nil)
 
+(defconst t3-code-dashboard--working-heading-id 't3-code-working-heading)
 (defconst t3-code-dashboard--settled-heading-id 't3-code-settled-heading)
 (defconst t3-code-dashboard--snoozed-heading-id 't3-code-snoozed-heading)
 (defconst t3-code-dashboard--truncated-heading-id 't3-code-truncated-heading)
@@ -113,6 +122,9 @@
               (propertize (t3-code-environment-endpoint t3-code-dashboard--environment)
                           'face 'font-lock-comment-face)
               "  [" (propertize (symbol-name state) 'face state-face) "]"
+              "  working:"
+              (propertize (if t3-code-dashboard--working-collapsed "hidden" "shown")
+                          'face 't3-code-dashboard-settled-face)
               "  settled:"
               (propertize (if t3-code-dashboard--settled-collapsed "hidden" "shown")
                           'face 't3-code-dashboard-settled-face)
@@ -214,14 +226,17 @@
   "Whether THREAD is currently running or awaiting approval."
   (member (plist-get thread :status) '("running" "waiting-approval")))
 
-(defun t3-code-dashboard--working-descendant-p (thread children &optional seen)
-  "Whether THREAD has a working child in CHILDREN, avoiding cycles via SEEN."
+(defun t3-code-dashboard--working-descendant-p (thread children &optional seen statuses)
+  "Whether THREAD has a working child in CHILDREN, avoiding cycles via SEEN.
+When STATUSES is non-nil, match those statuses instead."
   (let ((id (plist-get thread :id)))
     (unless (member id seen)
       (seq-some (lambda (child)
-                  (or (t3-code-dashboard--working-p child)
+                  (or (if statuses
+                          (member (plist-get child :status) statuses)
+                        (t3-code-dashboard--working-p child))
                       (t3-code-dashboard--working-descendant-p
-                       child children (cons id seen))))
+                       child children (cons id seen) statuses)))
                 (gethash id children)))))
 
 (defun t3-code-dashboard--agents-open-p (parent-id)
@@ -285,8 +300,8 @@ COLLAPSED tells its state and KEY the command toggling it."
     (time-less-p nil time)))
 
 (defun t3-code-dashboard--entries ()
-  "Build root threads, hidden agent trees, then snoozed and settled sections."
-  (let ((children (make-hash-table :test #'equal)) active snoozed settled)
+  "Build attention rows, then folded working, snoozed and settled trees."
+  (let ((children (make-hash-table :test #'equal)) active working snoozed settled)
     (dolist (project t3-code-dashboard--projects)
       (dolist (thread (plist-get project :threads))
         (when (and (equal (plist-get thread :relationshipToParent) "subagent")
@@ -299,15 +314,20 @@ COLLAPSED tells its state and KEY the command toggling it."
       (dolist (thread (plist-get project :threads))
         (unless (equal (plist-get thread :relationshipToParent) "subagent")
           (let ((row (cons project thread)))
-            (cond ((or (t3-code-shell-working-p thread)
-                       (t3-code-dashboard--working-descendant-p thread children))
+            (cond ((or (equal (plist-get thread :status) "waiting-approval")
+                       (t3-code-dashboard--working-descendant-p
+                        thread children nil '("waiting-approval")))
                    (push row active))
+                  ((or (t3-code-shell-working-p thread)
+                       (t3-code-dashboard--working-descendant-p thread children))
+                   (push row working))
                   ((eq (plist-get thread :settled) t) (push row settled))
                   ((t3-code-dashboard--snoozed-p thread) (push row snoozed))
                   (t (push row active)))))))
     ;; Pinned threads lead the active section, as in the web sidebar.
     (setq active (seq-sort-by (lambda (row) (if (eq (plist-get (cdr row) :pinned) t) 0 1))
                               #'< (nreverse active))
+          working (nreverse working)
           snoozed (nreverse snoozed)
           settled (nreverse settled))
     (append
@@ -327,7 +347,9 @@ COLLAPSED tells its state and KEY the command toggling it."
                                      (t3-code-dashboard--render-thread-tree
                                       (car row) (cdr row) children 0))
                                    rows))))))
-             (list (list t3-code-dashboard--snoozed-heading-id "Snoozed" snoozed
+             (list (list t3-code-dashboard--working-heading-id "Working" working
+                         t3-code-dashboard--working-collapsed "w")
+                   (list t3-code-dashboard--snoozed-heading-id "Snoozed" snoozed
                          t3-code-dashboard--snoozed-collapsed "z")
                    (list t3-code-dashboard--settled-heading-id "Settled" settled
                          t3-code-dashboard--settled-collapsed "s"))))))
@@ -387,6 +409,9 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
 (defun t3-code-dashboard--toggle-id (id)
   "Toggle menu ID and return non-nil when ID names a menu."
   (cond
+   ((eq id t3-code-dashboard--working-heading-id)
+    (t3-code-dashboard-toggle-working)
+    t)
    ((eq id t3-code-dashboard--settled-heading-id)
     (t3-code-dashboard-toggle-settled)
     t)
@@ -427,6 +452,14 @@ coalesced events, keeping raw T3 reducer schemas out of Elisp."
   (puthash parent-id (not (t3-code-dashboard--agents-open-p parent-id))
            t3-code-dashboard--expanded-agents)
   (t3-code-dashboard--refresh))
+
+(defun t3-code-dashboard-toggle-working ()
+  "Toggle visibility of running threads in the current dashboard."
+  (interactive)
+  (setq t3-code-dashboard--working-collapsed
+        (not t3-code-dashboard--working-collapsed))
+  (t3-code-dashboard--refresh)
+  (force-mode-line-update t))
 
 (defun t3-code-dashboard-toggle-settled ()
   "Toggle visibility of settled threads in the current dashboard."
@@ -521,6 +554,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   "TAB" #'t3-code-dashboard-toggle-at-point
   "<tab>" #'t3-code-dashboard-toggle-at-point
   "g" #'t3-code-dashboard-reconnect
+  "w" #'t3-code-dashboard-toggle-working
   "s" #'t3-code-dashboard-toggle-settled
   "z" #'t3-code-dashboard-toggle-snoozed
   "N" #'t3-code-dashboard-new-thread
@@ -537,6 +571,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
 ;; Keep reloads useful while iterating in a live dashboard buffer: `defvar-keymap'
 ;; preserves an existing map, so explicitly install newly added bindings too.
 (keymap-set t3-code-dashboard-mode-map "TAB" #'t3-code-dashboard-toggle-at-point)
+(keymap-set t3-code-dashboard-mode-map "w" #'t3-code-dashboard-toggle-working)
 (keymap-set t3-code-dashboard-mode-map "z" #'t3-code-dashboard-toggle-snoozed)
 (keymap-set t3-code-dashboard-mode-map "<tab>" #'t3-code-dashboard-toggle-at-point)
 
@@ -566,6 +601,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
   (t3-code-dashboard--configure-columns)
   (setq t3-code-dashboard--settled-collapsed
         t3-code-dashboard-collapse-settled
+        t3-code-dashboard--working-collapsed t3-code-dashboard-collapse-working
         t3-code-dashboard--expanded-agents (make-hash-table :test #'equal))
   (add-hook 'kill-buffer-hook #'t3-code-dashboard--cleanup nil t))
 

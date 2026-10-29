@@ -20,7 +20,9 @@
     (should (= (nth 1 (aref tabulated-list-format 0)) 36))
     (should (eq (lookup-key t3-code-dashboard-mode-map (kbd "TAB"))
                 #'t3-code-dashboard-toggle-at-point))
-    (let ((running (aref (cadr (car tabulated-list-entries)) 1)))
+    (should (t3-code-dashboard--goto-id t3-code-dashboard--working-heading-id))
+    (t3-code-dashboard-open-thread)
+    (let ((running (aref (cadr (assoc "thread-1" tabulated-list-entries)) 1)))
       (should (equal (substring-no-properties running) "● WORK"))
       (should (eq (get-text-property 0 'face running)
                   't3-code-dashboard-running-face)))))
@@ -44,6 +46,7 @@
 (ert-deftest t3-code-test-dashboard-refresh-preserves-row ()
   (with-temp-buffer
     (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--working-collapsed nil)
     (setq t3-code-dashboard--projects
           '((:id "project" :name "owner/repo"
              :threads ((:id "thread-1" :title "First" :status "running")
@@ -129,9 +132,10 @@
                        (:id "busy" :title "Busy" :status "running"
                         :snoozedUntil "2999-01-01T00:00:00.000Z")))))
     (t3-code-dashboard--refresh)
-    ;; Expired snoozes and working threads stay active.
+    ;; Expired snoozes stay active; running threads go to Working, not Snoozed.
     (should (equal (mapcar #'car tabulated-list-entries)
-                   (list "active" "woke" "busy" t3-code-dashboard--snoozed-heading-id)))
+                   (list "active" "woke" t3-code-dashboard--working-heading-id
+                         t3-code-dashboard--snoozed-heading-id)))
     (should (string-match-p "▸ Snoozed (1)" (buffer-string)))
     (should (t3-code-dashboard--goto-id t3-code-dashboard--snoozed-heading-id))
     (t3-code-dashboard-toggle-at-point)
@@ -143,7 +147,7 @@
     (t3-code-dashboard-mode)
     (setq t3-code-dashboard--projects
           '((:id "project" :name "owner/repo"
-             :threads ((:id "parent" :title "Parent" :status "running"
+             :threads ((:id "parent" :title "Parent" :status "idle"
                         :parentThreadId nil :relationshipToParent nil)
                        (:id "agent" :title "Agent" :status "idle"
                         :parentThreadId "parent" :relationshipToParent "subagent")
@@ -180,15 +184,21 @@
                        (:id "agent" :title "Agent" :status "running" :settled :false
                         :parentThreadId "parent" :relationshipToParent "subagent")))))
     (t3-code-dashboard--refresh)
-    ;; A working descendant keeps the parent visible, but never unfolds it.
-    (should (equal (mapcar #'car tabulated-list-entries) '("parent")))
+    ;; A working descendant puts the tree in Working, not Settled.
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   (list t3-code-dashboard--working-heading-id)))
+    (t3-code-dashboard-toggle-working)
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   (list t3-code-dashboard--working-heading-id "parent")))
     (should (string-match-p "▸ Agents" (buffer-string)))
     (should (t3-code-dashboard--goto-id "parent"))
     (t3-code-dashboard-toggle-at-point)
-    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "agent")))
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   (list t3-code-dashboard--working-heading-id "parent" "agent")))
     (t3-code-dashboard--on-shell-message
      (list :kind "event" :payload (list :projects t3-code-dashboard--projects)))
-    (should (equal (mapcar #'car tabulated-list-entries) '("parent" "agent")))))
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   (list t3-code-dashboard--working-heading-id "parent" "agent")))))
 
 (ert-deftest t3-code-test-dashboard-distinguishes-unknown-and-empty-diffs ()
   (let ((unknown (t3-code-dashboard--thread-entry nil '(:id "unknown")))
@@ -294,6 +304,72 @@
               (should (t3-code--credential-rejected-p
                        (t3-code-environment-fatal-error environment))))
           (kill-buffer buffer))))))
+
+(ert-deftest t3-code-test-dashboard-working-fold-and-status-transitions ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (let ((thread (list :id "busy" :title "Busy" :status "running" :pinned t)))
+      (setq t3-code-dashboard--projects
+            (list (list :id "project" :threads (list thread))))
+      (t3-code-dashboard--refresh)
+      (should-not (assoc "busy" tabulated-list-entries))
+      (should (string-match-p "▸ Working (1)" (buffer-string)))
+      (should (t3-code-dashboard--goto-id t3-code-dashboard--working-heading-id))
+      (t3-code-dashboard-toggle-at-point)
+      (should (assoc "busy" tabulated-list-entries))
+      (t3-code-dashboard--refresh)
+      (should-not t3-code-dashboard--working-collapsed)
+      (t3-code-dashboard-toggle-working)
+      (dolist (status '("waiting-approval" "failed" "idle"))
+        (setf (plist-get thread :status) status)
+        (t3-code-dashboard--refresh)
+        (should (equal (mapcar #'car tabulated-list-entries) '("busy"))))
+      (setf (plist-get thread :status) "running")
+      (t3-code-dashboard--refresh)
+      (should-not (assoc "busy" tabulated-list-entries)))))
+
+(ert-deftest t3-code-test-dashboard-approval-descendant-escapes-working-fold ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--projects
+          '((:id "project" :threads
+             ((:id "parent" :status "running")
+              (:id "child" :status "waiting-approval"
+               :relationshipToParent "subagent" :parentThreadId "parent")))))
+    (t3-code-dashboard--refresh)
+    (should (equal (mapcar #'car tabulated-list-entries) '("parent")))
+    (should-not (assoc t3-code-dashboard--working-heading-id tabulated-list-entries))))
+
+(ert-deftest t3-code-test-dashboard-failures-respect-lifecycle-folds ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (setq t3-code-dashboard--projects
+          '((:id "project" :threads
+             ((:id "settled-failure" :status "failed" :settled t)
+              (:id "settled-parent" :status "idle" :settled t)
+              (:id "failed-agent" :status "failed" :settled t
+               :relationshipToParent "subagent" :parentThreadId "settled-parent")
+              (:id "snoozed-failure" :status "failed"
+               :snoozedUntil "2999-01-01T00:00:00.000Z")
+              (:id "active-failure" :status "failed")))))
+    (t3-code-dashboard--refresh)
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   (list "active-failure" t3-code-dashboard--snoozed-heading-id
+                         t3-code-dashboard--settled-heading-id)))
+    (t3-code-dashboard-toggle-settled)
+    (should (assoc "settled-failure" tabulated-list-entries))
+    (should (assoc "settled-parent" tabulated-list-entries))
+    (should-not (assoc "failed-agent" tabulated-list-entries))))
+
+(ert-deftest t3-code-test-dashboard-working-custom-default ()
+  (let ((t3-code-dashboard-collapse-working nil))
+    (with-temp-buffer
+      (t3-code-dashboard-mode)
+      (should-not t3-code-dashboard--working-collapsed)
+      (setq t3-code-dashboard--projects
+            '((:id "project" :threads ((:id "busy" :status "running")))))
+      (t3-code-dashboard--refresh)
+      (should (assoc "busy" tabulated-list-entries)))))
 
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here

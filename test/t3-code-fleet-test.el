@@ -100,6 +100,29 @@
                            (equal (plist-get record :operation) "environment.attach")) sent))
         (should (= (hash-table-count (t3-code-environment-subscriptions remote)) 1))))))
 
+(ert-deftest t3-code-test-fleet-working-fold ()
+  (t3-code-test--with-catalog
+    (let ((remote (t3-code-environment-create :id "remote" :parent root
+                                                     :endpoint "https://devbox:3773"))
+          (shell '(:projects ((:id "project" :threads ((:id "busy" :status "running")))))))
+      (setf (t3-code-environment-environments root) (list remote)
+            (t3-code-environment-shell root) shell
+            (t3-code-environment-shell remote) shell)
+      (with-temp-buffer
+        (t3-code-fleet-mode)
+        (setq t3-code-fleet--root root)
+        (t3-code-fleet--refresh)
+        (should-not (assoc '("remote" "busy") tabulated-list-entries))
+        (should (t3-code-dashboard--goto-id
+                 (list "remote" t3-code-dashboard--working-heading-id)))
+        (t3-code-fleet-open)
+        (should (assoc '("remote" "busy") tabulated-list-entries))
+        (should (assoc '("local" "busy") tabulated-list-entries))
+        (t3-code-fleet-toggle-working)
+        (should-not (assoc '("remote" "busy") tabulated-list-entries))
+        (should (eq (lookup-key t3-code-fleet-mode-map (kbd "w"))
+                    #'t3-code-fleet-toggle-working))))))
+
 (ert-deftest t3-code-test-fleet-same-thread-id-has-distinct-rows-and-actions ()
   (t3-code-test--with-catalog
     (let* ((remote (t3-code-environment-create :id "remote" :endpoint "https://devbox:3773"
