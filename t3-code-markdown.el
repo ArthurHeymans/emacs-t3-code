@@ -45,9 +45,6 @@ a specific mode; nil shows plain text."
 (defvar diff-font-lock-syntax)
 (defvar diff-font-lock-prettify)
 
-(defvar t3-code-markdown--cache (make-hash-table :test #'equal)
-  "Fontified strings keyed by (MODE HIDE-MARKUP TEXT).")
-
 (defvar t3-code-markdown--auto-mode 'unknown
   "Markdown mode chosen by `auto', or nil when none is available.
 Probing is cached: a failing `require' searches the whole `load-path', and
@@ -140,15 +137,12 @@ Unavailable modes, oversized text and fontification errors yield TEXT."
                    (t3-code-markdown--resolve-mode kind))))
     (if (not (and mode (fboundp mode)))
         text
-      (let ((key (list mode t3-code-markdown-hide-markup text)))
-        (or (gethash key t3-code-markdown--cache)
-            (let ((result (condition-case nil
-                              (t3-code-markdown--fontify-with mode text)
-                            (error text))))
-              ;; Streaming bodies produce many one-off variants.
-              (when (> (hash-table-count t3-code-markdown--cache) 2000)
-                (clrhash t3-code-markdown--cache))
-              (puthash key result t3-code-markdown--cache)))))))
+      ;; The renderer caches the latest node per item, not every historical
+      ;; spelling of a streaming body.  A text-keyed cache here retained up to
+      ;; 2,000 obsolete, potentially large, fontified strings across all chats.
+      (condition-case nil
+          (t3-code-markdown--fontify-with mode text)
+        (error text)))))
 
 (defvar-keymap t3-code-markdown--url-map
   "<mouse-1>" #'t3-code-markdown-browse-url

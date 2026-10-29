@@ -156,8 +156,11 @@ INPUT-BUFFER may be nil.  Handlers should be idempotent.")
 (defun t3-code-thread-activity-phase (payload)
   "Return the activity phase described by thread PAYLOAD."
   (let* ((thread (plist-get payload :thread))
-         (streaming (seq-find (lambda (item) (eq (plist-get item :streaming) t))
-                              (reverse (plist-get payload :items)))))
+         streaming)
+    ;; Items arrive chronologically.  Remember the last streaming one without
+    ;; allocating a reversed timeline on every update, including hidden chats.
+    (dolist (item (plist-get payload :items))
+      (when (eq (plist-get item :streaming) t) (setq streaming item)))
     (cond ((null thread) "idle")
           ((equal (plist-get thread :status) "waiting-approval") "waiting")
           ((and streaming (equal (plist-get streaming :type) "reasoning")) "thinking")
