@@ -8,6 +8,9 @@
 
 (require 't3-code-dashboard)
 
+(declare-function t3-code-dashboard--display "t3-code-dashboard" (buffer))
+(declare-function t3-code-dashboard--configure-columns "t3-code-dashboard" (&optional width))
+
 (defvar-local t3-code-fleet--root nil)
 (defvar-local t3-code-fleet--agent-menus nil)
 
@@ -155,6 +158,7 @@
 (defun t3-code-fleet--refresh ()
   "Refresh the fleet while preserving the environment-qualified row at point."
   (let ((id (tabulated-list-get-id)) (column (current-column)))
+    (t3-code-dashboard--configure-columns)
     (setq tabulated-list-entries (t3-code-fleet--entries))
     (tabulated-list-print t)
     (when (and id (t3-code-dashboard--goto-id id))
@@ -263,6 +267,7 @@
 (defun t3-code-fleet--header-line ()
   "Describe the fleet and explain unavailable shared remote discovery."
   (concat " T3 environments · " (t3-code-environment-display-name t3-code-fleet--root)
+          "  · RET open · TAB fold · I details · C-h m keys"
           (unless (t3-code-capability-p t3-code-fleet--root :environments)
             (propertize " · Shared remotes unavailable (local admin connection required)"
                         'face 'warning))))
@@ -284,7 +289,7 @@
             t3-code-dashboard--environment root)
       (t3-code-fleet--state-changed root)
       (t3-code-fleet--refresh))
-    (pop-to-buffer buffer)
+    (t3-code-dashboard--display buffer)
     buffer))
 
 (provide 't3-code-fleet)

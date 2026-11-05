@@ -17,7 +17,8 @@
     (should (t3-code-dashboard--goto-id "thread-2"))
     (should (equal (tabulated-list-get-id) "thread-2"))
     (should (string-match-p "Second" (buffer-string)))
-    (should (= (nth 1 (aref tabulated-list-format 0)) 36))
+    (should (equal (car (aref tabulated-list-format 0)) "State"))
+    (should (= (nth 1 (aref tabulated-list-format 0)) 8))
     (should (eq (lookup-key t3-code-dashboard-mode-map (kbd "TAB"))
                 #'t3-code-dashboard-toggle-at-point))
     (should (t3-code-dashboard--goto-id t3-code-dashboard--working-heading-id))
@@ -391,6 +392,89 @@
         (should (equal (mapcar #'car rows)
                        (mapcar (lambda (thread) (plist-get thread :id)) threads)))
         (should (= (length threads) 1001))))))
+
+(ert-deftest t3-code-test-dashboard-columns-fit-normal-window-widths ()
+  (with-temp-buffer
+    (t3-code-dashboard-mode)
+    (dolist (width '(50 60 80 100 120 144 200))
+      (t3-code-dashboard--configure-columns width)
+      (let ((names (mapcar #'car (append tabulated-list-format nil)))
+            (used (+ tabulated-list-padding
+                     (1- (length tabulated-list-format))
+                     (apply #'+ (mapcar #'cadr (append tabulated-list-format nil))))))
+        (should (equal (seq-take names 2) '("State" "Thread")))
+        (should (member "Agents" names))
+        (should (<= used width))
+        (when (>= width 80) (should (member "Life" names)))
+        (when (< width 120) (should-not (member "Worktree" names)))))))
+
+(ert-deftest t3-code-test-dashboard-resize-preserves-buttons-and-header ()
+  (save-window-excursion
+    (with-temp-buffer
+      (t3-code-dashboard-mode)
+      (let ((width 144)
+            (header header-line-format))
+        (cl-letf (((symbol-function 't3-code-dashboard--width) (lambda () width)))
+          (setq t3-code-dashboard--environment (t3-code-environment-create :id "resize")
+                t3-code-dashboard--projects
+                '((:id "project" :name "owner/repo"
+                   :threads ((:id "parent" :title "Keep this row" :status "idle")
+                             (:id "child" :title "Child" :status "idle"
+                              :parentThreadId "parent" :relationshipToParent "subagent")))))
+          (t3-code-dashboard--refresh)
+          (t3-code-dashboard--goto-id "parent")
+          (setq width 80)
+          (t3-code-dashboard--window-change)
+          (should (equal (tabulated-list-get-id) "parent"))
+          (should (equal header-line-format header))
+          (search-forward "▸ Agents (1)" (line-end-position))
+          (backward-char)
+          (should (eq (key-binding (kbd "TAB")) #'t3-code-dashboard--toggle-agents-button))
+          (t3-code-dashboard-open-thread)
+          (should (assoc "child" tabulated-list-entries)))))))
+
+(ert-deftest t3-code-test-dashboard-details-include-hidden-metadata ()
+  (save-window-excursion
+    (with-temp-buffer
+      (t3-code-dashboard-mode)
+      (setq t3-code-dashboard--projects
+            '((:id "project" :name "owner/repo"
+               :threads ((:id "thread" :title "Complete title" :status "idle"
+                          :provider "codex" :model "hidden-model" :worktree "hidden-worktree")))))
+      (t3-code-dashboard--refresh)
+      (t3-code-dashboard--goto-id "thread")
+      (unwind-protect
+          (progn
+            (t3-code-dashboard-describe-thread)
+            (with-current-buffer "*T3 thread details*"
+              (should (string-match-p "hidden-model" (buffer-string)))
+              (should (string-match-p "hidden-worktree" (buffer-string)))
+              (should (string-match-p "Complete title" (buffer-string)))))
+        (when (get-buffer "*T3 thread details*") (kill-buffer "*T3 thread details*"))))))
+
+(ert-deftest t3-code-test-dashboard-opening-hides-input-without-losing-draft ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((chat (generate-new-buffer " *t3-chat-ledger-test*"))
+          (ledger (generate-new-buffer " *t3-ledger-test*")) input)
+      (unwind-protect
+          (cl-letf (((symbol-function 't3-code-thread--follow-directory) #'ignore))
+            (switch-to-buffer chat)
+            (t3-code-thread-mode)
+            (setq input (t3-code-thread-compose))
+            (insert "retained draft")
+            (t3-code-dashboard--display ledger)
+            (should (eq (current-buffer) ledger))
+            (should (= (length (window-list)) 1))
+            (should-not (get-buffer-window input))
+            (should (equal (with-current-buffer input (buffer-string)) "retained draft"))
+            (t3-code-thread-show chat t)
+            (should (eq (window-buffer) input))
+            (should (equal (with-current-buffer input (buffer-string)) "retained draft")))
+        (dolist (buffer (list input chat ledger))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
 
 (provide 't3-code-dashboard-test)
 ;;; t3-code-dashboard-test.el ends here

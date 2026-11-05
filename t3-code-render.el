@@ -46,7 +46,7 @@ and its latest stretch names what is happening now."
   :group 't3-code)
 
 (defface t3-code-assistant-heading-face
-  '((t :inherit (bold font-lock-function-name-face)))
+  '((t :inherit bold))
   "Face for \"Assistant\" headings."
   :group 't3-code)
 
@@ -422,13 +422,7 @@ group names its latest activity."
      ((null heading) "")
      ((plist-get node :setext)
       (let ((line (concat heading (if (and foldable (not open)) " …" ""))))
-        (concat "\n" (propertize line 'face (plist-get node :face)) "\n"
-                ;; Share the heading's face so the rule spans its height-scaled width.
-                (propertize (make-string (max 3 (string-width line)) ?=)
-                            'face (if-let* ((face (plist-get node :face)))
-                                      (list 'shadow face)
-                                    'shadow))
-                "\n")))
+        (concat "\n" (propertize line 'face (plist-get node :face)) "\n\n")))
      (t
       (concat (make-string (* 2 (max 0 (- depth 2))) ?\s)
               (if foldable (if open "▾ " "▸ ") "  ")
@@ -514,7 +508,9 @@ group names its latest activity."
          (items (t3-code-thread--items)))
     (append
      (when notice (list (list :key "notice" :text (propertize notice 'face 'shadow))))
-     (when (and pending (> pending 0))
+     ;; Inline request bodies already explain the questions.  Keep a compact
+     ;; attention index for folded/off-screen requests, without repeating prose.
+     (when (and pending (> pending (length attention)))
        (list (list :key "pending" :text (propertize
                                         (format "Needs attention · %d pending requests\n" pending)
                                         'face 'warning))))
@@ -522,11 +518,11 @@ group names its latest activity."
                (list :key (concat "attention:" (plist-get item :id))
                      :item-id (plist-get item :id)
                      :text (propertize
-                            (format "! %s · %s  (RET inspect)\n"
-                                    (or (plist-get item :label) "Needs attention")
-                                    (t3-code-thread--preview (or (plist-get item :text)
-                                                               (plist-get item :title))))
-                            'face 'warning 't3-code-attention (plist-get item :id))))
+                            (format "! %s  (RET inspect)\n"
+                                    (or (plist-get item :label) "Needs attention"))
+                            'face 'warning
+                            'help-echo (or (plist-get item :text) (plist-get item :title))
+                            't3-code-attention (plist-get item :id))))
              attention)
      (t3-code-thread--history-row)
      (mapcan #'t3-code-thread--node-rows (t3-code-thread--nodes))

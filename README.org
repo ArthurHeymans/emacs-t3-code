@@ -74,6 +74,13 @@ TRAMP; the bridge runs locally.
 Hiding a conversation does not stop the agent. Command output appears in
 the chat, not a live terminal.
 
+The input window is soft-dedicated: opening a file, Help or compilation output
+does not replace your draft. It grows with the draft and stays compact on
+resize. The chat header identifies the thread and workspace; the input header
+holds model controls, context usage, policy and the next send/queue action.
+Opening the ledger hides the input without discarding it; reopening the chat
+restores the draft.
+
 The ledger hides running threads under a collapsed =Working (N)= section.
 Press =w= to show/hide them, or =TAB=/=RET= on the heading. Finished threads
 return to the main list; approvals stay visible, including parents with agents
@@ -84,6 +91,11 @@ In the ledger, =TAB= or the inline =Agents= button expands delegated sessions;
 they stay folded until you open them. Diff counts describe the workspace's
 changes (the current change for jj), not an individual thread's edits.
 Unavailable counts display =—=.
+
+Both ledgers adapt to the narrowest window displaying them. State, thread title
+and agent folds take priority; secondary columns appear as space permits.
+Press =I= to inspect all row metadata, including hidden columns and full titles.
+=C-h m= lists the ledger's keys. Row position and folds survive resizing.
 
 Use =C-u C-c C-n= to choose a project across local and shared remote
 environments. The launch input header shows which environment will run it.

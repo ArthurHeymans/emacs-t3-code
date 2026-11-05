@@ -26,23 +26,17 @@ Failures do not override settled or snoozed state."
   :group 't3-code)
 
 (defface t3-code-dashboard-running-face
-  '((((class color) (background dark)) :foreground "#79a8ff" :weight bold)
-    (((class color) (background light)) :foreground "#1d4ed8" :weight bold)
-    (t :inherit font-lock-function-name-face))
+  '((t :inherit font-lock-function-name-face :weight bold))
   "Face for actively working threads."
   :group 't3-code)
 
 (defface t3-code-dashboard-approval-face
-  '((((class color) (background dark)) :foreground "#d0bc00" :weight bold)
-    (((class color) (background light)) :foreground "#a16207" :weight bold)
-    (t :inherit warning))
+  '((t :inherit warning :weight bold))
   "Face for threads awaiting approval."
   :group 't3-code)
 
 (defface t3-code-dashboard-failed-face
-  '((((class color) (background dark)) :foreground "#ff8059" :weight bold)
-    (((class color) (background light)) :foreground "#b91c1c" :weight bold)
-    (t :inherit error))
+  '((t :inherit error :weight bold))
   "Face for failed threads."
   :group 't3-code)
 
@@ -52,30 +46,22 @@ Failures do not override settled or snoozed state."
   :group 't3-code)
 
 (defface t3-code-dashboard-project-face
-  '((((class color) (background dark)) :foreground "#b6a0ff" :weight bold)
-    (((class color) (background light)) :foreground "#6d28d9" :weight bold)
-    (t :inherit font-lock-keyword-face))
+  '((t :inherit font-lock-keyword-face))
   "Face for project names."
   :group 't3-code)
 
 (defface t3-code-dashboard-provider-face
-  '((((class color) (background dark)) :foreground "#f78fe7")
-    (((class color) (background light)) :foreground "#a21caf")
-    (t :inherit font-lock-type-face))
+  '((t :inherit shadow))
   "Face for provider names."
   :group 't3-code)
 
 (defface t3-code-dashboard-model-face
-  '((((class color) (background dark)) :foreground "#00d3d0")
-    (((class color) (background light)) :foreground "#0f766e")
-    (t :inherit font-lock-constant-face))
+  '((t :inherit shadow))
   "Face for model names."
   :group 't3-code)
 
 (defface t3-code-dashboard-worktree-face
-  '((((class color) (background dark)) :foreground "#ef8b50")
-    (((class color) (background light)) :foreground "#c2410c")
-    (t :inherit font-lock-variable-name-face))
+  '((t :inherit shadow))
   "Face for worktree names."
   :group 't3-code)
 
@@ -116,23 +102,15 @@ Failures do not override settled or snoozed state."
       (concat " "
               (propertize "T3" 'face 'bold)
               " "
-              (propertize (t3-code-environment-id t3-code-dashboard--environment)
+              (propertize (t3-code-environment-display-name t3-code-dashboard--environment)
                           'face 't3-code-dashboard-project-face)
-              "  "
-              (propertize (t3-code-environment-endpoint t3-code-dashboard--environment)
-                          'face 'font-lock-comment-face)
               "  [" (propertize (symbol-name state) 'face state-face) "]"
-              "  working:"
-              (propertize (if t3-code-dashboard--working-collapsed "hidden" "shown")
-                          'face 't3-code-dashboard-settled-face)
-              "  settled:"
-              (propertize (if t3-code-dashboard--settled-collapsed "hidden" "shown")
-                          'face 't3-code-dashboard-settled-face)
               (if t3-code-dashboard--shell-truncated
                   (propertize
                    (format "  ⚠ %s omitted" (t3-code-dashboard--omission-text))
                    'face 'warning)
                 "")
+              "  · RET open · TAB fold · I details · C-h m keys"
               (when (eq state 'disconnected)
                 (when-let* ((fatal (t3-code-environment-fatal-error
                                     t3-code-dashboard--environment))
@@ -172,7 +150,7 @@ Failures do not override settled or snoozed state."
                    (propertize "snoozed" 'face 't3-code-dashboard-settled-face
                                'help-echo (format "Snoozed until %s"
                                                   (plist-get thread :snoozedUntil))))
-                  (t (propertize "active" 'face 'success)))
+                  (t (propertize "active" 'face 'shadow)))
             (if (eq (plist-get thread :pinned) t)
                 (propertize " ^" 'face 't3-code-dashboard-project-face
                             'help-echo "Pinned")
@@ -372,6 +350,7 @@ COLLAPSED tells its state and KEY the command toggling it."
           (window-starts
            (mapcar (lambda (window) (cons window (window-start window)))
                    (get-buffer-window-list (current-buffer) nil t))))
+      (t3-code-dashboard--configure-columns)
       (setq tabulated-list-entries (t3-code-dashboard--entries))
       (tabulated-list-print t)
       (when (and row-id (t3-code-dashboard--goto-id row-id))
@@ -570,35 +549,125 @@ token).  Plain refresh never asks for a token, even after a disconnect."
 
 ;; Keep reloads useful while iterating in a live dashboard buffer: `defvar-keymap'
 ;; preserves an existing map, so explicitly install newly added bindings too.
+(keymap-set t3-code-dashboard-mode-map "I" #'t3-code-dashboard-describe-thread)
 (keymap-set t3-code-dashboard-mode-map "TAB" #'t3-code-dashboard-toggle-at-point)
 (keymap-set t3-code-dashboard-mode-map "w" #'t3-code-dashboard-toggle-working)
 (keymap-set t3-code-dashboard-mode-map "z" #'t3-code-dashboard-toggle-snoozed)
 (keymap-set t3-code-dashboard-mode-map "<tab>" #'t3-code-dashboard-toggle-at-point)
 
-(defun t3-code-dashboard--configure-columns ()
-  "Configure dashboard columns and initialize their header."
-  (setq tabulated-list-format
-        [("Project" 36 nil)
-         ("State" 8 nil)
-         ("Life" 10 nil)
-         ("Thread" 36 nil)
-         ("Provider" 10 nil)
-         ("Model" 16 nil)
-         ("Worktree" 8 nil)
-         ("Diff" 10 nil)
-         ("Agents" 14 nil)]
-        tabulated-list-padding 2
-        tabulated-list-sort-key nil)
-  ;; Column names go in the buffer: the header line shows the connection
-  ;; state, including why a connection failed.
-  (setq-local tabulated-list-use-header-line nil)
-  (tabulated-list-init-header)
-  ;; Set after `tabulated-list-init-header', which clears it.
-  (setq header-line-format '(:eval (t3-code-dashboard--header-line))))
+(defconst t3-code-dashboard--column-names
+  ["Project" "State" "Life" "Thread" "Provider" "Model" "Worktree" "Diff" "Agents"]
+  "Canonical row fields, independent of the visible column layout.")
+
+(defvar-local t3-code-dashboard--columns nil)
+(defvar-local t3-code-dashboard--layout-width nil)
+
+(defun t3-code-dashboard--width ()
+  "Return the narrowest visible ledger's width, or 80 when hidden."
+  (let ((windows (get-buffer-window-list (current-buffer) nil 'visible)))
+    (if windows (apply #'min (mapcar #'window-body-width windows)) 80)))
+
+(defun t3-code-dashboard--configure-columns (&optional width)
+  "Fit the ledger to WIDTH, returning non-nil when its layout changes.
+Keep state, title, project and agent folds visible first.  Extra metadata
+is available with `t3-code-dashboard-describe-thread' at every width."
+  (let ((width (or width (t3-code-dashboard--width))))
+    (unless (equal width t3-code-dashboard--layout-width)
+      (setq t3-code-dashboard--layout-width width
+            t3-code-dashboard--columns
+            (append '(1 3) (when (>= width 60) '(0))
+                    (when (>= width 80) '(2)) '(8)
+                    (when (>= width 90) '(7))
+                    (when (>= width 120) '(6))
+                    (when (>= width 140) '(5))
+                    (when (>= width 170) '(4))))
+      (let* ((sizes (mapcar (lambda (index)
+                             (pcase index
+                               (1 8) (0 (min 24 (max 12 (/ width 6))))
+                               (2 10) (8 12) (7 11) (6 14) (5 18) (4 10) (_ 0)))
+                           t3-code-dashboard--columns))
+             (title-width (max 12 (- width (apply #'+ sizes)
+                                     (length sizes) 3))))
+        (setq tabulated-list-format
+              (vconcat (cl-mapcar
+                        (lambda (index size)
+                          (list (aref t3-code-dashboard--column-names index)
+                                (if (= index 3) title-width size) nil))
+                        t3-code-dashboard--columns sizes))))
+      (setq tabulated-list-padding 2
+            tabulated-list-sort-key nil)
+      (setq-local tabulated-list-use-header-line nil)
+      (let ((header header-line-format))
+        (tabulated-list-init-header)
+        (setq header-line-format header))
+      t)))
+
+(defun t3-code-dashboard--print-entry (id columns)
+  "Print canonical COLUMNS for ID in the current width-aware layout."
+  (let ((domain-id (if (consp id) (cadr id) id)))
+    (if (or (memq domain-id (list t3-code-dashboard--working-heading-id
+                                  t3-code-dashboard--settled-heading-id
+                                  t3-code-dashboard--snoozed-heading-id
+                                  t3-code-dashboard--truncated-heading-id))
+            (eq domain-id :environment))
+        ;; Section headings span columns, instead of truncating to State.
+        (let ((start (point)))
+          (insert "  " (aref columns 0)
+                  (if (eq domain-id :environment)
+                      (format "  [%s]  %s  %s" (aref columns 1)
+                              (aref columns 3) (aref columns 7))
+                    "")
+                  "\n")
+          (add-text-properties start (point)
+                               (list 'tabulated-list-id id 'tabulated-list-entry columns)))
+      (tabulated-list-print-entry
+       id (vconcat
+           (cl-mapcar
+            (lambda (index format)
+              (let* ((cell (aref columns index))
+                     (text (if (consp cell) (car cell) cell))
+                     (label (truncate-string-to-width text (nth 1 format) nil nil "…")))
+                (unless (or (string-empty-p label) (get-text-property 0 'help-echo label))
+                  (put-text-property 0 (length label) 'help-echo text label))
+                (if (consp cell) (cons label (cdr cell)) label)))
+            t3-code-dashboard--columns (append tabulated-list-format nil)))))))
+
+(declare-function t3-code-fleet--refresh "t3-code-fleet" ())
+
+(defun t3-code-dashboard--window-change (&optional _window)
+  "Reflow visible ledgers on display or resize, retaining row IDs."
+  (when (t3-code-dashboard--configure-columns)
+    (if (derived-mode-p 't3-code-fleet-mode)
+        (t3-code-fleet--refresh)
+      (t3-code-dashboard--refresh))))
+
+(defun t3-code-dashboard-describe-thread ()
+  "Show all metadata for the row at point, including hidden columns."
+  (interactive)
+  (let ((columns (cadr (assoc (tabulated-list-get-id) tabulated-list-entries))))
+    (unless columns (user-error "Choose a thread first"))
+    (with-help-window "*T3 thread details*"
+      (dotimes (index (length columns))
+        (let ((value (aref columns index)))
+          (princ (format "%-10s %s\n" (aref t3-code-dashboard--column-names index)
+                         (if (consp value) (car value) value))))))))
+
+(defun t3-code-dashboard--display (buffer)
+  "Show ledger BUFFER in the current workspace without a stray composer."
+  (t3-code-thread--select-chat-window)
+  (when (derived-mode-p 't3-code-thread-mode)
+    (when (buffer-live-p t3-code-thread--composer)
+      (dolist (window (get-buffer-window-list t3-code-thread--composer nil))
+        (when (window-parent window) (delete-window window)))))
+  (pop-to-buffer buffer t3-code-thread--display-action))
 
 (define-derived-mode t3-code-dashboard-mode tabulated-list-mode "T3-Dashboard"
   "Major mode for the read-only T3 fleet dashboard."
   (t3-code-dashboard--configure-columns)
+  (setq header-line-format '(:eval (t3-code-dashboard--header-line)))
+  (setq-local tabulated-list-printer #'t3-code-dashboard--print-entry)
+  (add-hook 'window-size-change-functions #'t3-code-dashboard--window-change nil t)
+  (add-hook 'window-buffer-change-functions #'t3-code-dashboard--window-change nil t)
   (setq t3-code-dashboard--settled-collapsed
         t3-code-dashboard-collapse-settled
         t3-code-dashboard--working-collapsed t3-code-dashboard-collapse-working
@@ -626,7 +695,7 @@ token).  Plain refresh never asks for a token, even after a disconnect."
                                      (with-current-buffer buffer
                                        (t3-code-dashboard--on-shell-message message)))))))
       (t3-code-dashboard--refresh))
-    (pop-to-buffer buffer)
+    (t3-code-dashboard--display buffer)
     buffer))
 
 (provide 't3-code-dashboard)
