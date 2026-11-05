@@ -210,13 +210,29 @@ Bridges advertising `threadSections: true` add `runId`, `runStatus`, `runOrdinal
 
 `presentation: "work"` identifies earlier assistant commentary in a completed run; the last assistant item remains `"message"`. This follows T3's last-assistant-per-run presentation, not a provider-declared final-answer flag. Running, interrupted or unclassified messages remain readable. Other tools are grouped by their existing normalized item type. No attempt-level fold metadata is currently exposed.
 
-`pendingRequestCount` counts all pending runtime requests. `attention` separately retains up to 20 pending approval/user-input items available in the authoritative projection, even outside the 100-item timeline window, with text capped to 2,000 UTF-8 bytes per item and no detail body. The count can exceed the supplied details; consumers must not invent missing requests or assume the list is complete. Existing frame limits still apply. A `user_input_request` action ID is not an approval ID; it is answered through `thread.command` with `runtime-request.respond` and `answers` (see below).
+`pendingRequestCount` counts all pending runtime requests plus local pending secret requests in the authoritative projection. `attention` separately retains up to 20 pending approval/user-input/secret items available in the authoritative projection, even outside the 100-item timeline window, with text capped to 2,000 UTF-8 bytes per item and no detail body. The count can exceed the supplied details; consumers must not invent missing requests or assume the list is complete. Existing frame limits still apply. A `user_input_request` action ID is not an approval ID; it is answered through `thread.command` with `runtime-request.respond` and `answers` (see below).
 
 `file_change` items carry the changed `path`. Pending `user_input_request` items carry structured `questions` (`id`, `header`, `question`, `multiSelect`, `allowCustomAnswer`, and up to 32 `options` with `label`, `description` and the exact `value` to answer with). `tokenUsage` is the provider's latest context report, or null. `queued` lists up to 50 queued follow-up messages in queue order; `held` marks a queue paused after a restart, and `truncated` marks `text` that is only a bounded preview. Clients must not offer a preview as the starting point for `queued-run.edit`, which replaces the whole message.
 
 `hasOlderHistory` is true when items older than the first supplied item exist, either because the bridge trimmed its window or because the server's bounded snapshot has more history. A bridge advertising `threadLifecycle: true` answers `thread.history` with `{threadId, beforeItemId}` by returning `{items, hasMore}`: up to 100 chronological items immediately before `beforeItemId`, normalized and bounded like the live window. Clients page backwards from their oldest loaded item, which must come from the live window or an earlier page; the request needs a live subscription to the thread. Rows still in the server's bounded window are served directly; older ones come from the server's history pages, whose opaque cursors stay inside the bridge. An unknown `beforeItemId` fails with `history-unavailable` rather than reporting the end of history. Live replacements never include history pages, so a client that has loaded pages keeps items that later slide out of the live window.
 
 Folds are client-local state, not lifecycle commands. Folding never stops a run, and expanding cannot recover text omitted by the bridge's bounds. Resource log/control streams are not in this protocol slice.
+
+### Secret requests
+
+`secretRequests: true` advertises `thread.secret.respond`. A `secret_request` item carries
+`secretStatus` (`pending`, `saved`, `declined`, `cancelled`), its label and reason in
+`label`/`text`, optional `delivery: "file"`, and its turn-item ID as `actionId`.
+Use `secretStatus`, not the generic activity `status`, to determine whether it needs
+an answer. `visibility: "inherited"` or `"synthetic"` forbids answering in this thread.
+
+Send `{threadId, turnItemId, answer: {type: "save", secret: "…"}}` or
+`{threadId, turnItemId, answer: {type: "decline"}}`. This dedicated RPC does not take a
+`commandId` and must never go through `thread.command` or chat. Only status enters
+the timeline. Without `delivery`, T3 gives the agent a one-use reference, never the
+value; `file` permits the agent's commands to read a private file on the requesting
+environment for 24 hours. Clients must make that distinction visible before entry,
+keep values out of history and diagnostics, and not retry answers automatically.
 
 ## Normalized thread mutations
 

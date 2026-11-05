@@ -110,8 +110,11 @@ rather than accumulate.  Each chat owns its cache.")
 
 (defun t3-code-thread--pending-p (item)
   "Whether ITEM is a request still waiting for a response."
-  (and (member (plist-get item :type) '("approval_request" "user_input_request"))
-       (member (plist-get item :status) '("pending" "waiting"))))
+  (if (equal (plist-get item :type) "secret_request")
+      (and (equal (plist-get item :secretStatus) "pending")
+           (not (member (plist-get item :visibility) '("inherited" "synthetic"))))
+    (and (member (plist-get item :type) '("approval_request" "user_input_request"))
+         (member (plist-get item :status) '("pending" "waiting")))))
 
 (defun t3-code-thread--attention-p (item)
   "Whether ITEM deserves attention outside any folded turn."
@@ -232,6 +235,22 @@ rather than accumulate.  Each chat owns its cache.")
        (append base (list :heading (or (plist-get item :label) "Plan")
                           :face 't3-code-thread-plan-face :open t
                           :body (funcall markdown text detail))))
+      ("secret_request"
+       (append base
+               (list :heading
+                     (format "Secret: %s · %s%s"
+                             (or (plist-get item :label) "Secret needed")
+                             (pcase (plist-get item :secretStatus)
+                               ("saved" "provided") ("declined" "declined")
+                               ("cancelled" "request ended")
+                               (_ (if (t3-code-thread--pending-p item)
+                                      "needed" "answer in original thread")))
+                             (if (t3-code-thread--pending-p item) "  (RET to provide)" ""))
+                     :face (if (t3-code-thread--pending-p item) 'warning 'shadow)
+                     :open t
+                     :body (funcall markdown text (t3-code-thread--secret-privacy item)
+                                    (when (t3-code-thread--pending-p item)
+                                      "RET: provide secret · M-x t3-code-thread-decline-secret: decline")))))
       ((or "approval_request" "user_input_request")
        (append base (list :heading (concat (or (plist-get item :label) "Needs attention")
                                            (t3-code-thread--status-suffix item)
@@ -248,6 +267,12 @@ rather than accumulate.  Each chat owns its cache.")
        (append base (list :heading (t3-code-thread--tool-heading item)
                           :preview t :open nil
                           :body (t3-code-thread--tool-body item)))))))
+
+(defun t3-code-thread--secret-privacy (item)
+  "Describe the access granted by secret request ITEM."
+  (if (equal (plist-get item :delivery) "file")
+      "Shell access: kept out of chat, in a private file on the requesting environment that this agent's commands can read for 24 hours."
+    "Private use: stored securely by T3, never shown to the agent."))
 
 (defun t3-code-thread--questions-text (item)
   "Describe the structured questions of input request ITEM, if any."

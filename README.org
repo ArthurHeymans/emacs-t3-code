@@ -71,6 +71,16 @@ TRAMP; the bridge runs locally.
 | =o=       | Load older history (chat)               |
 | =q=       | Hide chat and input (chat)              |
 
+Secret requests appear in the chat without interrupting your work. Press =RET=
+on a pending request to enter its value in a masked minibuffer; =C-g= leaves it
+pending. The thread menu (=?=) offers provide/decline actions,
+also available as =M-x t3-code-thread-provide-secret= and
+=M-x t3-code-thread-decline-secret=. The request distinguishes private T3 use
+from shell access, where the agent's commands can read a private file on the
+requesting environment for 24 hours. Values never enter the composer or chat
+history and are not saved locally. Answering requires an updated =t3 client
+--stdio= bridge advertising =secretRequests=.
+
 Hiding a conversation does not stop the agent. Command output appears in
 the chat, not a live terminal.
 

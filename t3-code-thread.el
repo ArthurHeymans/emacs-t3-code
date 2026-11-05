@@ -23,6 +23,7 @@
 (defvar-local t3-code-thread--payload nil)
 (defvar-local t3-code-thread--composer nil)
 (defvar-local t3-code-thread--phase "idle")
+(defvar-local t3-code-thread--secret-in-flight nil)
 
 (defcustom t3-code-thread-default-runtime-mode "full-access"
   "Runtime mode shown for threads without projected policy data."
@@ -1083,6 +1084,75 @@ An input window already there, or selected, is reused rather than split."
   (when (yes-or-no-p "Cancel the turn awaiting approval? ")
     (t3-code-thread-respond-approval "cancel")))
 
+(defun t3-code-thread--secret-item ()
+  "Return the actionable secret request at point or the latest one."
+  (unless (t3-code-capability-p t3-code-thread--environment :secretRequests)
+    (user-error "Update the T3 bridge to answer secret requests"))
+  (let* ((at-point (t3-code-thread--item-by-id (t3-code-thread--item-at-point)))
+         (item (if (equal (plist-get at-point :type) "secret_request")
+                   (and (t3-code-thread--pending-p at-point) at-point)
+                 (t3-code-thread--pending-item "secret_request"))))
+    (unless item (user-error "No pending secret request in this thread"))
+    (when (member (plist-get item :id) t3-code-thread--secret-in-flight)
+      (user-error "This secret answer is already being submitted"))
+    item))
+
+(defun t3-code-thread--send-secret (item answer)
+  "Send ANSWER to secret request ITEM without logging raw failures."
+  (let ((environment t3-code-thread--environment)
+        (buffer (current-buffer))
+        (id (plist-get item :id)))
+    (unless (eq (t3-code-environment-state environment) 'ready)
+      (user-error "T3 environment is not ready"))
+    (push id t3-code-thread--secret-in-flight)
+    (condition-case nil
+        (t3-code-request
+         environment "thread.secret.respond"
+         (list :threadId t3-code-thread--thread-id :turnItemId id :answer answer)
+         (lambda (_result error)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (setq t3-code-thread--secret-in-flight
+                     (delete id t3-code-thread--secret-in-flight))))
+           (message "%s" (if error
+                               "Could not confirm secret answer. Check request status before retrying."
+                             "T3 secret request answered"))))
+      (error
+       (setq t3-code-thread--secret-in-flight
+             (delete id t3-code-thread--secret-in-flight))
+       (user-error "Could not send secret answer. Check request status before retrying")))))
+
+(defun t3-code-thread-provide-secret ()
+  "Provide a secret using masked entry, never the chat composer.
+Quitting entry leaves the request pending.  Secrets are not saved locally."
+  (interactive)
+  (let* ((item (t3-code-thread--secret-item))
+         (id (plist-get item :id))
+         (secret nil))
+    (unwind-protect
+        (progn
+          (message "%s" (t3-code-thread--secret-privacy item))
+          (setq secret
+                (read-passwd
+                 (format "%s [%s / %s; %s]: "
+                         (plist-get item :label)
+                         (t3-code-environment-id t3-code-thread--environment)
+                         t3-code-thread--thread-id
+                         (if (equal (plist-get item :delivery) "file")
+                             "shell access" "private use"))))
+          (when (string-match-p "\\`[[:space:]]*\\'" secret)
+            (user-error "A nonempty secret is required"))
+          ;; Process filters can update the request while the minibuffer is active.
+          (unless (t3-code-thread--pending-p (t3-code-thread--item-by-id id))
+            (user-error "This secret request has already ended"))
+          (t3-code-thread--send-secret item (list :type "save" :secret secret)))
+      (when (stringp secret) (clear-string secret)))))
+
+(defun t3-code-thread-decline-secret ()
+  "Explicitly decline a pending secret request."
+  (interactive)
+  (t3-code-thread--send-secret (t3-code-thread--secret-item) (list :type "decline")))
+
 (defun t3-code-thread--read-answer (question)
   "Ask QUESTION in the minibuffer and return its answer value.
 Multi-select questions collect one choice per prompt, so option labels and
@@ -1755,6 +1825,9 @@ With prefix argument INVERT, invert where files are visited."
     (cond
      ((get-text-property (point) 't3-code-attention) (t3-code-thread-inspect))
      ((plist-get row :history) (t3-code-thread-load-older))
+     ((and item (equal (plist-get item :type) "secret_request")
+           (t3-code-thread--pending-p item))
+      (t3-code-thread-provide-secret))
      ((and item (equal (plist-get item :type) "user_input_request")
            (t3-code-thread--pending-p item))
       (t3-code-thread-answer-input))
@@ -1881,6 +1954,8 @@ trailing `&' runs the command asynchronously."
     ("Y" "approve session" t3-code-thread-approve-session)
     ("x" "decline" t3-code-thread-decline)
     ("X" "cancel turn" t3-code-thread-cancel-approval)
+    ("i" "provide secret" t3-code-thread-provide-secret)
+    ("I" "decline secret" t3-code-thread-decline-secret)
     ("a" "answer input" t3-code-thread-answer-input :if t3-code-thread--lifecycle-p)
     ("A" "dismiss input" t3-code-thread-dismiss-input :if t3-code-thread--lifecycle-p)]
    ["Modes"
