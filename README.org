@@ -81,6 +81,11 @@ holds model controls, context usage, policy and the next send/queue action.
 Opening the ledger hides the input without discarding it; reopening the chat
 restores the draft.
 
+Settling from the chat closes its chat and input windows, retaining buffers
+and drafts. Settling elsewhere (such as the web UI or phone) also closes them
+by default; set =t3-code-thread-auto-close-settled= to =nil= to disable this.
+Already settled threads can still be opened without closing automatically.
+
 The ledger hides running threads under a collapsed =Working (N)= section.
 Press =w= to show/hide them, or =TAB=/=RET= on the heading. Finished threads
 return to the main list; approvals stay visible, including parents with agents

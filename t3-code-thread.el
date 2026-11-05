@@ -55,6 +55,14 @@ and `hidden' only opens it when composing (\\`m', \\`i' or \\`a')."
   :type '(choice (const always) (const on-demand) (const hidden))
   :group 't3-code)
 
+(defcustom t3-code-thread-auto-close-settled t
+  "Whether settling a thread elsewhere hides its chat and input windows.
+This applies to live transitions to settled, not opening an already settled
+thread.  Buffers and unsent drafts are retained.  Settling from the chat
+always hides its windows, regardless of this option."
+  :type 'boolean
+  :group 't3-code)
+
 (defcustom t3-code-visit-file-other-window t
   "Whether \\`RET' on a file reference visits it in another window.
 A prefix argument inverts this for one visit."
@@ -1409,13 +1417,18 @@ Copy only the payload and thread plists; timeline items remain shared."
          (t3-code-thread--set-thread-field :interactionMode mode))))))
 
 (defun t3-code-thread-settle ()
-  "Move this thread to the settled section."
+  "Move this thread to the settled section and hide its windows on success."
   (interactive)
-  (t3-code-thread--request
-   "thread.settled.set"
-   (list :threadId t3-code-thread--thread-id
-         :commandId (t3-code-thread--id "settle") :settled t)
-   "T3 thread settled"))
+  (let ((chat (current-buffer)))
+    (t3-code-thread--request
+     "thread.settled.set"
+     (list :threadId t3-code-thread--thread-id
+           :commandId (t3-code-thread--id "settle") :settled t)
+     "T3 thread settled"
+     (lambda (_result)
+       (when (buffer-live-p chat)
+         (with-current-buffer chat
+           (t3-code-thread--hide-windows t)))))))
 
 (defun t3-code-thread-reactivate ()
   "Reactivate this thread."
@@ -1921,11 +1934,16 @@ token).  Plain refresh never asks for a token, even after a disconnect."
 (defun t3-code-thread-quit ()
   "Hide this frame's thread and input windows without stopping work."
   (interactive)
+  (t3-code-thread--hide-windows))
+
+(defun t3-code-thread--hide-windows (&optional all-frames)
+  "Hide this chat and its input, retaining buffers and drafts.
+With ALL-FRAMES non-nil, hide their windows on every frame."
   (let ((viewer (current-buffer)))
     (when (buffer-live-p t3-code-thread--composer)
-      (dolist (window (get-buffer-window-list t3-code-thread--composer nil))
+      (dolist (window (get-buffer-window-list t3-code-thread--composer nil all-frames))
         (quit-window nil window)))
-    (dolist (window (get-buffer-window-list viewer nil))
+    (dolist (window (get-buffer-window-list viewer nil all-frames))
       (quit-window nil window))))
 
 (defun t3-code-thread--cleanup ()
@@ -1995,7 +2013,8 @@ A retrying bridge may emit an error snapshot between successful snapshots;
 only synchronization proves that its stream has recovered."
   (let* ((kind (plist-get message :kind))
          (payload (plist-get message :payload))
-         (error-text (and payload (plist-get payload :error))))
+         (error-text (and payload (plist-get payload :error)))
+         (old-thread (or (t3-code-thread--thread) t3-code-thread--summary)))
     (cond
      (error-text
       (setq t3-code-thread--stream-error error-text)
@@ -2004,7 +2023,12 @@ only synchronization proves that its stream has recovered."
      ((member kind '("snapshot" "event"))
       (t3-code-thread--retain-displaced (plist-get t3-code-thread--payload :items)
                                         (plist-get payload :items))
-      (setq t3-code-thread--payload payload))
+      (setq t3-code-thread--payload payload)
+      (when (and t3-code-thread-auto-close-settled
+                 old-thread
+                 (not (eq (plist-get old-thread :settled) t))
+                 (eq (plist-get (t3-code-thread--thread) :settled) t))
+        (t3-code-thread--hide-windows t)))
      ((equal kind "synchronized")
       (setq t3-code-thread--stream-error nil)))
     (when (or (not (equal t3-code-thread--payload t3-code-thread--rendered-payload))

@@ -89,6 +89,65 @@
       (should (eq (plist-get (cdr suffix) :command)
                   #'t3-code-thread-compose-queue)))))
 
+(ert-deftest t3-code-test-settle-hides-chat-and-input-only-on-success ()
+  (save-window-excursion
+    (with-temp-buffer
+      (let ((input (current-buffer)))
+        (insert "Keep this draft")
+        (with-temp-buffer
+          (t3-code-thread-mode)
+          (setq t3-code-thread--environment
+                (t3-code-environment-create
+                 :id "test" :state 'ready :capabilities '(:mutations t))
+                t3-code-thread--thread-id "thread-1"
+                t3-code-thread--composer input)
+          (let ((chat (current-buffer))
+                (t3-code-thread-auto-close-settled nil)
+                callback)
+            (switch-to-buffer chat)
+            (set-window-buffer (split-window-below) input)
+            (cl-letf (((symbol-function 't3-code-request)
+                       (lambda (_environment _operation _input cb)
+                         (setq callback cb))))
+              (t3-code-thread-settle)
+              (should (get-buffer-window chat))
+              (funcall callback nil '(:message "Rejected"))
+              (should (get-buffer-window chat))
+              (should (get-buffer-window input))
+              (t3-code-thread-settle)
+              (funcall callback '(:sequence 1) nil))
+            (should-not (get-buffer-window chat))
+            (should-not (get-buffer-window input))
+            (should (buffer-live-p chat))
+            (should (equal (with-current-buffer input (buffer-string))
+                           "Keep this draft"))))))))
+
+(ert-deftest t3-code-test-remote-settle-hides-only-on-live-transition ()
+  (should (default-value 't3-code-thread-auto-close-settled))
+  (dolist (enabled '(t nil))
+    (with-temp-buffer
+      (t3-code-thread-mode)
+      (let ((t3-code-thread-auto-close-settled enabled)
+            (active '(:thread (:id "thread-1" :settled :false)))
+            (settled '(:thread (:id "thread-1" :settled t)))
+            calls)
+        (cl-letf (((symbol-function 't3-code-thread--hide-windows)
+                   (lambda (&optional all-frames) (push all-frames calls)))
+                  ((symbol-function 't3-code-thread--request-refresh) #'ignore)
+                  ((symbol-function 't3-code-thread--follow-directory) #'ignore)
+                  ((symbol-function 't3-code-thread--update-names) #'ignore))
+          ;; Initial settled snapshots and repeated events must not hide a
+          ;; deliberately opened settled thread.
+          (t3-code-thread--receive (list :kind "snapshot" :payload settled))
+          (t3-code-thread--receive (list :kind "event" :payload settled))
+          (should-not calls)
+          (t3-code-thread--receive (list :kind "event" :payload active))
+          (t3-code-thread--receive '(:kind "snapshot" :payload (:error "Retry")))
+          (should-not calls)
+          (t3-code-thread--receive (list :kind "event" :payload settled))
+          (t3-code-thread--receive (list :kind "snapshot" :payload settled))
+          (should (equal calls (and enabled '(t)))))))))
+
 (ert-deftest t3-code-test-composer-menu-targets-new-draft-or-existing-chat ()
   (save-window-excursion
     (with-temp-buffer
