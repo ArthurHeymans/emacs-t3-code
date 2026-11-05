@@ -1138,5 +1138,108 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
                     (list :thread '(:id "thread") :items (list reasoning tool)))
                    "replying"))))
 
+(ert-deftest t3-code-test-compose-hint-is-display-only-and-follows-draft ()
+  (with-temp-buffer
+    (t3-code-compose-mode)
+    (should (equal (buffer-string) ""))
+    (should-not (buffer-modified-p))
+    (should (string-match-p "Write a message" (overlay-get t3-code-compose--hint 'after-string)))
+    (should (get-text-property 0 'cursor (overlay-get t3-code-compose--hint 'after-string)))
+    (insert "unsent draft")
+    (should-not (overlay-get t3-code-compose--hint 'after-string))
+    (should (equal (buffer-string) "unsent draft"))
+    (erase-buffer)
+    (should (overlay-get t3-code-compose--hint 'after-string))))
+
+(ert-deftest t3-code-test-thread-headers-have-distinct-jobs ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (let ((chat (current-buffer)))
+      (setq t3-code-thread--payload
+            '(:thread (:title "A clear thread title" :status "running"
+                       :activeRunId "run" :provider "codex" :model "gpt"
+                       :branch "feature/ui" :tokenUsage (:usedTokens 30 :maxTokens 100))))
+      (let ((header (t3-code-thread--header-line)))
+        (should (string-match-p "A clear thread title.*running.*feature/ui" header))
+        (should-not (string-match-p "ctx\\|codex/gpt" header)))
+      (with-temp-buffer
+        (t3-code-compose-mode)
+        (setq t3-code-compose--origin-buffer chat)
+        (let ((header (t3-code-compose--header-line)))
+          (should (string-match-p "gpt.*ctx 30%.*C-c C-c queue" header))
+          (should-not (string-match-p "A clear thread title" header)))
+        (with-current-buffer chat
+          (setq t3-code-thread--payload '(:thread (:title "A clear thread title" :status "idle"))))
+        (should (string-match-p "C-c C-c send" (t3-code-compose--header-line)))))))
+
+(ert-deftest t3-code-test-thread-attention-index-does-not-repeat-request-prose ()
+  (with-temp-buffer
+    (t3-code-thread-mode)
+    (setq t3-code-thread--payload
+          '(:thread (:id "thread") :pendingRequestCount 1
+            :items ((:id "approval" :type "approval_request" :label "Approval needed"
+                     :status "waiting" :text "Allow this operation?"))))
+    (t3-code-thread--refresh)
+    (let ((text (t3-code-test--visible-text)))
+      (should (string-match-p "! Approval needed  (RET inspect)" text))
+      (should (= (length (split-string text (regexp-quote "Allow this operation?"))) 2))
+      (should-not (string-match-p "pending requests" text)))
+    (goto-char (car (gethash "attention:approval" t3-code-thread--positions)))
+    (should (equal (get-text-property (point) 't3-code-attention) "approval"))))
+
+(ert-deftest t3-code-test-thread-headings-use-whitespace-not-markup-rules ()
+  (let ((text (t3-code-thread--heading-row-text
+               '(:heading "Assistant" :setext t :face t3-code-assistant-heading-face)
+               0 t nil)))
+    (should (equal (substring-no-properties text) "\nAssistant\n\n"))
+    (should (eq (get-text-property 1 'face text) 't3-code-assistant-heading-face))))
+
+(ert-deftest t3-code-test-compose-survives-file-and-help-windows ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((chat (generate-new-buffer " *t3-layout-test*"))
+          (file (make-temp-file "t3-visit" nil ".el" ";;; Test file\n"))
+          input file-buffer help)
+      (unwind-protect
+          (cl-letf (((symbol-function 't3-code-thread--follow-directory) #'ignore))
+            (switch-to-buffer chat)
+            (t3-code-thread-mode)
+            (setq input (t3-code-thread-compose))
+            (insert "preserve this draft")
+            (should (eq (window-dedicated-p) 'side))
+            (select-window (get-buffer-window chat))
+            (t3-code-thread--visit-file (list file 1 nil))
+            (setq file-buffer (current-buffer))
+            (should (get-buffer-window input))
+            (should (get-buffer-window chat))
+            (should (eq (window-in-direction 'above (get-buffer-window input)) (selected-window)))
+            ;; The file now separates the pair: follow the input's link,
+            ;; not the buffer geometrically above it, when switching chats.
+            (select-window (get-buffer-window input))
+            (t3-code-thread--select-chat-window)
+            (should (eq (current-buffer) chat))
+            (setq help (generate-new-buffer " *t3-help-test*"))
+            (display-buffer help)
+            (should (get-buffer-window input))
+            (t3-code-thread-show chat t)
+            (should (eq (window-buffer) input))
+            (should (= (length (get-buffer-window-list input)) 1))
+            (should (equal (with-current-buffer input (buffer-string)) "preserve this draft")))
+        (dolist (buffer (list input chat file-buffer help))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))
+        (delete-file file)))))
+
+(ert-deftest t3-code-test-thread-prefers-a-taller-window-over-a-small-popup ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let* ((main (selected-window))
+           (small (split-window main -5 'below)))
+      (select-window small)
+      (t3-code-thread--select-chat-window)
+      (should (eq (selected-window) main))
+      (should (= (length (window-list)) 2)))))
+
 (provide 't3-code-thread-test)
 ;;; t3-code-thread-test.el ends here

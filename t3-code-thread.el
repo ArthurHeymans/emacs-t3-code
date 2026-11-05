@@ -89,30 +89,22 @@ INPUT-BUFFER may be nil.  Handlers should be idempotent.")
   "Launch parameters when this input starts a new thread instead.")
 
 (defface t3-code-thread-user-face
-  '((((class color) (background dark)) :foreground "#b6a0ff" :weight bold)
-    (((class color) (background light)) :foreground "#6d28d9" :weight bold)
-    (t :inherit font-lock-keyword-face))
+  '((t :inherit font-lock-keyword-face :weight bold))
   "Face for user messages."
   :group 't3-code)
 
 (defface t3-code-thread-assistant-face
-  '((((class color) (background dark)) :foreground "#79a8ff" :weight bold)
-    (((class color) (background light)) :foreground "#1d4ed8" :weight bold)
-    (t :inherit font-lock-function-name-face))
+  '((t :inherit font-lock-function-name-face :weight bold))
   "Face for assistant messages."
   :group 't3-code)
 
 (defface t3-code-thread-action-face
-  '((((class color) (background dark)) :foreground "#00d3d0" :weight bold)
-    (((class color) (background light)) :foreground "#0f766e" :weight bold)
-    (t :inherit font-lock-type-face))
+  '((t :inherit font-lock-type-face :weight bold))
   "Face for tool and action entries."
   :group 't3-code)
 
 (defface t3-code-thread-plan-face
-  '((((class color) (background dark)) :foreground "#f78fe7" :weight bold)
-    (((class color) (background light)) :foreground "#a21caf" :weight bold)
-    (t :inherit font-lock-constant-face))
+  '((t :inherit font-lock-constant-face :weight bold))
   "Face for plans and todos."
   :group 't3-code)
 
@@ -232,19 +224,17 @@ INPUT-BUFFER may be nil.  Handlers should be idempotent.")
     (string-join
      (delq nil
            (list
-            (concat " " (propertize title 'face 'bold)
+            (concat " " (propertize (truncate-string-to-width title 48 nil nil "…")
+                                      'face 'bold 'help-echo title)
                     "  [" (propertize status 'face (t3-code-thread--status-face status)) "]")
-            (unless (string-empty-p provider)
-              (propertize (concat provider (if (string-empty-p model) "" (concat "/" model)))
-                          'face 't3-code-model-face))
+            (when branch (propertize branch 'face 'shadow))
+            ;; Normally the model belongs to the composer.  Keep a changed
+            ;; selection's still-running model visible, even with input hidden.
             (when (and running-model
                        (or (not (equal running-model model))
                            (not (equal running-provider provider))))
-              (format "running: %s/%s" (or running-provider provider) running-model))
-            (when branch (propertize branch 'face 'shadow))
-            (unless (equal t3-code-thread--phase "idle")
-              (propertize t3-code-thread--phase 'face 't3-code-activity-phase-face))
-            (t3-code-thread--context-text)
+              (format "%s/%s · running: %s/%s"
+                      provider model (or running-provider provider) running-model))
             (when (> t3-code-thread--unseen 0)
               (format "%d unseen updates" t3-code-thread--unseen))
             (when (and t3-code-thread--environment
@@ -776,7 +766,7 @@ FALLBACK names the model when SELECTION is nil."
      " · ")))
 
 (defun t3-code-compose--header-line ()
-  "Display the model, activity and policy of the thread this input targets."
+  "Display model controls, context, policy and the next send action."
   (if t3-code-compose--launch
       (t3-code-compose--launch-header)
     (let ((origin t3-code-compose--origin-buffer)
@@ -793,21 +783,15 @@ FALLBACK names the model when SELECTION is nil."
                    (list
                     (concat " " (t3-code-compose--model-segment
                                  selection (or (plist-get thread :model) "model")))
-                    (propertize t3-code-thread--phase 'face 't3-code-activity-phase-face)
                     (t3-code-thread--context-text)
-                    (propertize (truncate-string-to-width
-                                 (or (plist-get thread :title)
-                                     (plist-get t3-code-thread--summary :title)
-                                     t3-code-thread--thread-id "")
-                                 40 nil nil "…")
-                                'face 'bold)
                     (t3-code-thread--current-runtime-mode)
                     (when (equal (t3-code-thread--current-interaction-mode) "plan") "plan")
                     (when (> queued 0) (format "%d queued" queued))
-                    (when sending "sending")
-                    (when preselected
-                      (propertize (format "C-c C-c will %s" preselected) 'face 'warning))
-                    (t3-code-thread--indicator)))
+                    (if sending "sending…"
+                      (propertize
+                       (format "C-c C-c %s"
+                               (or preselected (if (t3-code-thread--busy-p) "queue" "send")))
+                       'face (if preselected 'warning 'shadow)))))
              " · ")))))))
 
 ;;;; Input mode
@@ -845,9 +829,11 @@ FALLBACK names the model when SELECTION is nil."
   (setq-local completion-at-point-functions
               (list #'t3-code-compose-completion-at-point))
   (add-hook 'after-change-functions #'t3-code-compose--refit nil t)
+  (add-hook 'window-size-change-functions #'t3-code-compose--window-change nil t)
   ;; Input buffers are hidden by a leading space, which disables undo.
   (buffer-enable-undo)
-  (visual-line-mode 1))
+  (visual-line-mode 1)
+  (t3-code-compose--update-hint))
 
 (defun t3-code-compose--find (environment thread-id)
   "Return the live input buffer of THREAD-ID in ENVIRONMENT, or nil."
@@ -868,9 +854,31 @@ FALLBACK names the model when SELECTION is nil."
     (fit-window-to-buffer window (max (+ max chrome) 1)
                           (+ t3-code-input-window-min-height chrome))))
 
+(defvar-local t3-code-compose--hint nil
+  "Display-only empty draft hint; never becomes prompt text or undo history.")
+
+(defun t3-code-compose--update-hint ()
+  "Show a quiet invitation to compose, only when the draft is empty."
+  (unless (overlayp t3-code-compose--hint)
+    (setq t3-code-compose--hint (make-overlay (point-min) (point-min))))
+  (move-overlay t3-code-compose--hint (point-min) (point-min))
+  (overlay-put t3-code-compose--hint 'after-string
+               (when (= (point-min) (point-max))
+                 (let ((hint (propertize "Write a message…   C-c C-p actions · TAB complete"
+                                         'face 'shadow)))
+                   ;; Keep the cursor at the start, not after the placeholder.
+                   (put-text-property 0 1 'cursor t hint)
+                   hint))))
+
 (defun t3-code-compose--refit (&rest _)
-  "Refit the windows showing this input after its draft changed."
+  "Refresh the hint and fit windows showing this input after draft changes."
+  (t3-code-compose--update-hint)
   (dolist (window (get-buffer-window-list nil nil t))
+    (t3-code-compose--fit-window window)))
+
+(defun t3-code-compose--window-change (window)
+  "Keep input WINDOW compact after its frame or containing split is resized."
+  (when (and (window-live-p window) (window-parent window))
     (t3-code-compose--fit-window window)))
 
 (defun t3-code-compose--prefetch-catalog (environment)
@@ -896,6 +904,9 @@ FALLBACK names the model when SELECTION is nil."
 (defun t3-code-compose--display (buffer)
   "Display input BUFFER below the selected chat window and select it.
 An input window already there, or selected, is reused rather than split."
+  (when-let* ((origin (buffer-local-value 't3-code-compose--origin-buffer buffer))
+              (chat-window (get-buffer-window origin)))
+    (select-window chat-window))
   (let ((window (or (get-buffer-window buffer)
                     (and (t3-code-compose--input-window-p (selected-window))
                          (selected-window))
@@ -909,7 +920,11 @@ An input window already there, or selected, is reused rather than split."
                (t3-code-compose--fit-window window))
       (pop-to-buffer buffer
                      '((display-buffer-reuse-window display-buffer-below-selected)
-                       (window-height . t3-code-compose--fit-window))))))
+                       (window-height . t3-code-compose--fit-window))))
+    ;; Like pi, protect the draft from Help, file visits and compilation.
+    ;; Soft dedication still allows explicit buffer switching by the user.
+    (set-window-dedicated-p (selected-window) 'side)
+    (with-current-buffer buffer (t3-code-compose--update-hint))))
 
 (defun t3-code-thread-compose (&optional dispatch-mode)
   "Focus this thread's input, preselecting DISPATCH-MODE for the next send."
@@ -2006,15 +2021,21 @@ only synchronization proves that its stream has recovered."
 `display-buffer-alist' entries still take precedence.")
 
 (defun t3-code-thread--select-chat-window ()
-  "From a T3 input window, select the chat window above it.
-A new chat then replaces the old chat, and its input the old input,
-instead of the chat landing in the small input window."
-  ;; Check the window, not the current buffer: callbacks run elsewhere.
+  "Choose a usable chat window without replacing a protected composer.
+Follow the input's buffer link, not geometry: a file or Help window may
+now sit between chat and input.  Prefer a taller window over splitting
+a small auxiliary window, without deleting unrelated windows."
   (when (t3-code-compose--input-window-p (selected-window))
-    (when-let* ((above (window-in-direction 'above))
-                ((with-current-buffer (window-buffer above)
-                   (derived-mode-p 't3-code-thread-mode))))
-      (select-window above))))
+    (let* ((input (window-buffer))
+           (origin (buffer-local-value 't3-code-compose--origin-buffer input))
+           (chat-window (and (buffer-live-p origin) (get-buffer-window origin))))
+      (when chat-window (select-window chat-window))))
+  (when (or (t3-code-compose--input-window-p (selected-window))
+            (< (window-total-height) (+ window-min-height t3-code-input-window-min-height 2)))
+    (when-let* ((target
+                (car (sort (seq-remove #'t3-code-compose--input-window-p (window-list))
+                           (lambda (a b) (> (window-total-height a) (window-total-height b)))))))
+      (select-window target))))
 
 (defun t3-code-thread-show (chat &optional focus-input)
   "Display CHAT with its input window; select the input when FOCUS-INPUT."
