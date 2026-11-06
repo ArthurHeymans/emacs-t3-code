@@ -703,20 +703,24 @@ Reserve a leading slash at buffer start for provider commands."
                       (plist-get commands :skills))
               :annotation-function #'t3-code-compose--annotate)))
      ((and (string-prefix-p "@" token) context)
-      (let* ((cache nil)
-             (table (completion-table-dynamic
-                     (lambda (query)
-                       (unless (equal (car cache) query)
-                         (setq cache (cons query (t3-code-compose--file-entries
-                                                  (nth 0 context) (nth 2 context) query))))
-                       (cdr cache)))))
-        (list (1+ start) end
-              ;; The server matches anywhere in the path, so complete by substring.
-              (lambda (string predicate action)
-                (if (eq action 'metadata)
-                    '(metadata (category . t3-code-file))
-                  (funcall table string predicate action))))))
+      (list (1+ start) end (t3-code-compose--file-table context)))
      (t (t3-code-compose--path-capf)))))
+
+(defun t3-code-compose--file-table (context)
+  "Return the @file completion table searching CONTEXT's project on the server."
+  (let* ((cache nil)
+         (dynamic
+          (completion-table-dynamic
+           (lambda (query)
+             ;; The server matches anywhere in the path, so complete by substring.
+             (unless (equal (car cache) query)
+               (setq cache (cons query (t3-code-compose--file-entries
+                                        (nth 0 context) (nth 2 context) query))))
+             (cdr cache)))))
+    (lambda (string predicate action)
+      (if (eq action 'metadata)
+          '(metadata (category . t3-code-file))
+        (funcall dynamic string predicate action)))))
 
 (add-to-list 'completion-category-defaults '(t3-code-file (styles substring basic)))
 
@@ -726,6 +730,62 @@ Reserve a leading slash at buffer start for provider commands."
   (let ((completion-show-help nil))
     (unless (completion-at-point)
       (indent-for-tab-command))))
+
+(defun t3-code-compose--at-trigger-p ()
+  "Whether the @ just typed should offer project files.
+As in pi, an @ that follows an alphanumeric character belongs to an email
+address, not to a file reference."
+  (or (< (point) 3)
+      (save-excursion
+        (backward-char 2)
+        (looking-at-p "[^[:alnum:]]"))))
+
+(defun t3-code-compose--maybe-complete-at ()
+  "Complete a file reference right after @ is typed, as in pi."
+  (when (and (eq last-command-event ?@) (t3-code-compose--at-trigger-p))
+    (let ((buffer (current-buffer)))
+      ;; Defer past `self-insert-command' so completion never nests inside it.
+      (run-at-time 0 nil
+                   (lambda ()
+                     (when (buffer-live-p buffer)
+                       (with-current-buffer buffer
+                         (t3-code-compose-complete-file-reference))))))))
+
+(defun t3-code-compose-complete-file-reference ()
+  "Pick a project file for the @ reference at point, as in pi.
+The picker reads in the minibuffer, so it works with or without a completion
+popup in the input buffer.  Text typed after @ narrows the server search and
+is replaced by the chosen path."
+  (when-let* (((derived-mode-p 't3-code-compose-mode))
+              (at (save-excursion (search-backward "@" (line-beginning-position) t)))
+              ((not (string-match-p "[ \t\n]" (buffer-substring-no-properties at (point)))))
+              (context (t3-code-compose--context)))
+    (let* ((start (copy-marker (1+ at)))
+           (typed (buffer-substring-no-properties start (point)))
+           (choice (completing-read "File: " (t3-code-compose--file-table context)
+                                    nil nil typed)))
+      (when (and (stringp choice) (not (string-empty-p choice)))
+        (delete-region start (point))
+        (goto-char start)
+        (insert choice)))))
+
+(defun t3-code-compose--enable-corfu ()
+  "Enable Corfu in this input buffer although its name hides it.
+`global-corfu-mode' never enables `corfu-mode' in a buffer whose name starts
+with a space, which is how this input travels hidden with its chat, yet the
+input is displayed in its own window and completes like any other buffer.
+Honor `global-corfu-modes', so modes excluded there stay excluded.  Corfu is
+an optional package: nothing happens when it is absent or disabled."
+  (when (and (and (boundp 'global-corfu-mode) (symbol-value 'global-corfu-mode))
+             (fboundp 'corfu-mode)
+             (or (not (fboundp 'easy-mmode--globalized-predicate-p))
+                 (not (boundp 'global-corfu-modes))
+                 (easy-mmode--globalized-predicate-p
+                  (symbol-value 'global-corfu-modes))))
+    (corfu-mode 1)))
+
+;; `easy-mmode' is preloaded, but the byte compiler does not know this helper.
+(declare-function easy-mmode--globalized-predicate-p "easy-mmode" (modes))
 
 ;;;; Input header
 
@@ -837,6 +897,10 @@ FALLBACK names the model when SELECTION is nil."
   ;; As in pi, offer only our completions, not dictionary words from text-mode.
   (setq-local completion-at-point-functions
               (list #'t3-code-compose-completion-at-point))
+  ;; pi opens file references as soon as @ is typed and completes paths in a
+  ;; popup; Corfu needs asking because the input hides behind a leading space.
+  (add-hook 'post-self-insert-hook #'t3-code-compose--maybe-complete-at nil t)
+  (t3-code-compose--enable-corfu)
   (add-hook 'after-change-functions #'t3-code-compose--refit nil t)
   (add-hook 'window-size-change-functions #'t3-code-compose--window-change nil t)
   ;; Input buffers are hidden by a leading space, which disables undo.

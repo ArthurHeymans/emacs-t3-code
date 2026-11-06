@@ -876,6 +876,87 @@ Requests are collected in `requests' as (OPERATION INPUT), newest first."
               (should-not (t3-code-compose-completion-at-point)))))
       (delete-directory root t))))
 
+(ert-deftest t3-code-test-compose-enables-corfu-despite-hidden-name ()
+  (let (calls)
+    (unwind-protect
+        (progn
+          (set 'global-corfu-mode t)
+          (with-temp-buffer
+            (rename-buffer " *t3 hidden input*" t)
+            (cl-letf (((symbol-function 'corfu-mode)
+                       (lambda (&optional arg) (push arg calls))))
+              (t3-code-compose-mode))
+            (should (equal calls '(1)))))
+      (makunbound 'global-corfu-mode)))
+  ;; Corfu stays untouched when its global mode is off or absent.
+  (let (calls)
+    (with-temp-buffer
+      (rename-buffer " *t3 hidden input*" t)
+      (cl-letf (((symbol-function 'corfu-mode)
+                 (lambda (&optional arg) (push arg calls))))
+        (t3-code-compose-mode))
+      (should-not calls))))
+
+(ert-deftest t3-code-test-compose-at-opens-file-reference-after-insert ()
+  (with-temp-buffer
+    (t3-code-compose-mode)
+    (let ((completions 0) (scheduled 0))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_secs _repeat function &rest args)
+                   ;; Ignore Emacs's own timers, such as undo boundaries.
+                   (unless (symbolp function)
+                     (setq scheduled (1+ scheduled))
+                     (apply function args))))
+                ((symbol-function 't3-code-compose-complete-file-reference)
+                 (lambda () (setq completions (1+ completions)))))
+        ;; A word-boundary @ offers project files, as in pi.
+        (insert "look at ")
+        (setq last-command-event ?@)
+        (insert "@")
+        (t3-code-compose--maybe-complete-at)
+        (should (= scheduled 1))
+        (should (= completions 1))
+        ;; An @ inside an email address is ordinary text.
+        (erase-buffer)
+        (insert "mail me@")
+        (t3-code-compose--maybe-complete-at)
+        (should (= completions 1))
+        ;; Paths complete through the capf, not on every keystroke.
+        (erase-buffer)
+        (insert "read ../")
+        (setq last-command-event ?.)
+        (t3-code-compose--maybe-complete-at)
+        (should (= completions 1))))))
+
+(ert-deftest t3-code-test-compose-at-picks-a-project-file ()
+  (with-temp-buffer
+    (t3-code-compose-mode)
+    (let (asked)
+      (cl-letf
+          (((symbol-function 't3-code-compose--context)
+            (lambda () (list 'env "instance" "/srv/app/")))
+           ((symbol-function 't3-code-compose--file-entries)
+            (lambda (_environment _directory query)
+              (setq asked query)
+              (when (string-match-p "src" query) '("src/app.el" "src/db.el"))))
+           ((symbol-function 'completing-read)
+            (lambda (prompt collection &rest _)
+              (should (equal prompt "File: "))
+              (should (member "src/db.el" (all-completions "src" collection)))
+              "src/db.el")))
+        ;; The picker replaces the text typed after @ with the chosen path.
+        (insert "look at @src")
+        (t3-code-compose-complete-file-reference)
+        (should (equal (buffer-string) "look at @src/db.el"))
+        (should (equal asked "src")))
+      ;; Plain paths never open the picker; they complete in the buffer.
+      (erase-buffer)
+      (insert "look ./src")
+      (setq asked nil)
+      (t3-code-compose-complete-file-reference)
+      (should-not asked)
+      (should (equal (buffer-string) "look ./src")))))
+
 (ert-deftest t3-code-test-compose-path-completion-follows-remote-worktree ()
   (with-temp-buffer
     (t3-code-compose-mode)

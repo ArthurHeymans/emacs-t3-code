@@ -48,7 +48,11 @@ working, this queues a follow-up; =C-c C-s= steers the current turn instead.
 Click the model or reasoning effort in the input header to change it.
 
 =TAB= completes slash commands, =$skills=, =@project-files= and file paths.
-=M-p= / =M-n= recall previous prompts. In the chat, =TAB= expands folded
+As in pi, typing =@= immediately opens a file picker in the minibuffer; text
+typed after =@= narrows the server search and the chosen path replaces it.
+=./=, =../=, =~/= and absolute paths pop up while typing. The input buffer
+hides from buffer lists behind a leading space, so it re-enables those popups
+itself. =M-p= / =M-n= recall previous prompts. In the chat, =TAB= expands folded
 tool calls and reasoning, and =RET= opens files and links or answers a
 pending question. Scroll back to read history; =G= resumes following output.
 
