@@ -100,7 +100,7 @@
                            (equal (plist-get record :operation) "environment.attach")) sent))
         (should (= (hash-table-count (t3-code-environment-subscriptions remote)) 1))))))
 
-(ert-deftest t3-code-test-fleet-working-fold ()
+(ert-deftest t3-code-test-fleet-working-fold-is-per-environment ()
   (t3-code-test--with-catalog
     (let ((remote (t3-code-environment-create :id "remote" :parent root
                                                      :endpoint "https://devbox:3773"))
@@ -115,11 +115,20 @@
         (should-not (assoc '("remote" "busy") tabulated-list-entries))
         (should (t3-code-dashboard--goto-id
                  (list "remote" t3-code-dashboard--working-heading-id)))
+        ;; Folding a heading affects only the environment owning it.
         (t3-code-fleet-open)
         (should (assoc '("remote" "busy") tabulated-list-entries))
-        (should (assoc '("local" "busy") tabulated-list-entries))
+        (should-not (assoc '("local" "busy") tabulated-list-entries))
+        (should (t3-code-dashboard--goto-id
+                 (list "local" t3-code-dashboard--working-heading-id)))
         (t3-code-fleet-toggle-working)
+        (should (assoc '("local" "busy") tabulated-list-entries))
+        (should (assoc '("remote" "busy") tabulated-list-entries))
+        (should (t3-code-dashboard--goto-id
+                 (list "remote" t3-code-dashboard--working-heading-id)))
+        (t3-code-fleet-open)
         (should-not (assoc '("remote" "busy") tabulated-list-entries))
+        (should (assoc '("local" "busy") tabulated-list-entries))
         (should (eq (lookup-key t3-code-fleet-mode-map (kbd "w"))
                     #'t3-code-fleet-toggle-working))))))
 

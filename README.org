@@ -100,7 +100,9 @@ The ledger hides running threads under a collapsed =Working (N)= section.
 Press =w= to show/hide them, or =TAB=/=RET= on the heading. Finished threads
 return to the main list; approvals stay visible, including parents with agents
 awaiting approval. Failures do not override settled or snoozed state. Set =t3-code-dashboard-collapse-working= to =nil=
-to start with Working expanded. This also applies to the shared-remote fleet.
+to start with Working expanded.  The shared-remote fleet keeps Working, Settled
+and Snoozed folds per environment: =w=, =s= and =z= fold only the environment at
+point, so one server's folds never change another server's view.
 
 In the ledger, =TAB= or the inline =Agents= button expands delegated sessions;
 they stay folded until you open them. Diff counts describe the workspace's
