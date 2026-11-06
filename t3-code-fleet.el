@@ -13,6 +13,8 @@
 
 (defvar-local t3-code-fleet--root nil)
 (defvar-local t3-code-fleet--agent-menus nil)
+(defvar-local t3-code-fleet--section-states nil
+  "Per-environment Working, Settled and Snoozed fold state.")
 
 (defun t3-code-fleet-root (environment)
   "Return the catalog connection owning ENVIRONMENT."
@@ -120,17 +122,47 @@
       (puthash (t3-code-environment-id environment) (make-hash-table :test #'equal)
                t3-code-fleet--agent-menus)))
 
+(defun t3-code-fleet--section-state (environment)
+  "Return ENVIRONMENT's independent section-fold plist for this fleet."
+  (unless t3-code-fleet--section-states
+    (setq t3-code-fleet--section-states (make-hash-table :test #'equal)))
+  (or (gethash (t3-code-environment-id environment) t3-code-fleet--section-states)
+      (puthash (t3-code-environment-id environment)
+               (list :working t3-code-dashboard-collapse-working
+                     :settled t3-code-dashboard-collapse-settled
+                     :snoozed t)
+               t3-code-fleet--section-states)))
+
+(defun t3-code-fleet--store-section-state (environment state)
+  "Record ENVIRONMENT's section-fold STATE for this fleet."
+  (unless t3-code-fleet--section-states
+    (setq t3-code-fleet--section-states (make-hash-table :test #'equal)))
+  (puthash (t3-code-environment-id environment) state t3-code-fleet--section-states))
+
 (defun t3-code-fleet--call-in-environment (environment function)
-  "Call FUNCTION with ENVIRONMENT's shell and menus as the dashboard context."
+  "Call FUNCTION with ENVIRONMENT's shell and folds as the dashboard context.
+Section folds are bound per environment, so toggling one environment's Working,
+Settled or Snoozed heading never changes another environment's view.  Any fold
+FUNCTION changes are written back to ENVIRONMENT alone."
   (let* ((shell (t3-code-environment-shell environment))
+         (state (t3-code-fleet--section-state environment))
          (t3-code-dashboard--environment environment)
          (t3-code-dashboard--projects (plist-get shell :projects))
          (t3-code-dashboard--expanded-agents (t3-code-fleet--menu-state environment))
          (t3-code-dashboard--shell-truncated (eq (plist-get shell :truncated) t))
          (t3-code-dashboard--omitted-settled-count (plist-get shell :omittedSettledCount))
          (t3-code-dashboard--omitted-other-count (plist-get shell :omittedOtherCount))
-         (t3-code-dashboard--omitted-project-count (plist-get shell :omittedProjectCount)))
-    (funcall function)))
+         (t3-code-dashboard--omitted-project-count (plist-get shell :omittedProjectCount))
+         (t3-code-dashboard--working-collapsed (plist-get state :working))
+         (t3-code-dashboard--settled-collapsed (plist-get state :settled))
+         (t3-code-dashboard--snoozed-collapsed (plist-get state :snoozed)))
+    (unwind-protect
+        (funcall function)
+      (t3-code-fleet--store-section-state
+       environment
+       (list :working t3-code-dashboard--working-collapsed
+             :settled t3-code-dashboard--settled-collapsed
+             :snoozed t3-code-dashboard--snoozed-collapsed)))))
 
 (defun t3-code-fleet--entries ()
   "Render environment headings and reuse each ordinary dashboard's rows."
@@ -199,23 +231,29 @@
   (interactive)
   (t3-code-fleet--action #'t3-code-dashboard-toggle-at-point))
 
-(defun t3-code-fleet-toggle-working ()
-  "Toggle working sections in the fleet."
-  (interactive)
-  (setq t3-code-dashboard--working-collapsed (not t3-code-dashboard--working-collapsed))
+(defun t3-code-fleet--toggle-section (command)
+  "Toggle a section of the environment at point with dashboard COMMAND."
+  (t3-code-fleet--call-in-environment
+   (t3-code-fleet-environment-at-point)
+   (lambda ()
+     (cl-letf (((symbol-function 't3-code-dashboard--refresh) #'ignore))
+       (funcall command))))
   (t3-code-fleet--refresh))
+
+(defun t3-code-fleet-toggle-working ()
+  "Toggle the Working section of the environment at point."
+  (interactive)
+  (t3-code-fleet--toggle-section #'t3-code-dashboard-toggle-working))
 
 (defun t3-code-fleet-toggle-settled ()
-  "Toggle settled sections in the fleet."
+  "Toggle the Settled section of the environment at point."
   (interactive)
-  (setq t3-code-dashboard--settled-collapsed (not t3-code-dashboard--settled-collapsed))
-  (t3-code-fleet--refresh))
+  (t3-code-fleet--toggle-section #'t3-code-dashboard-toggle-settled))
 
 (defun t3-code-fleet-toggle-snoozed ()
-  "Toggle snoozed sections in the fleet."
+  "Toggle the Snoozed section of the environment at point."
   (interactive)
-  (setq t3-code-dashboard--snoozed-collapsed (not t3-code-dashboard--snoozed-collapsed))
-  (t3-code-fleet--refresh))
+  (t3-code-fleet--toggle-section #'t3-code-dashboard-toggle-snoozed))
 
 (defun t3-code-fleet-pin ()
   "Toggle pinning on the thread at point."
@@ -274,7 +312,8 @@
 
 (define-derived-mode t3-code-fleet-mode t3-code-dashboard-mode "T3-Fleet"
   "Ledger of threads grouped by their owning local or remote environment."
-  (setq t3-code-fleet--agent-menus (make-hash-table :test #'equal))
+  (setq t3-code-fleet--agent-menus (make-hash-table :test #'equal)
+        t3-code-fleet--section-states (make-hash-table :test #'equal))
   ;; Fleet listeners belong to the shared store, not to this view.
   (remove-hook 'kill-buffer-hook #'t3-code-dashboard--cleanup t)
   (setq header-line-format '(:eval (t3-code-fleet--header-line))))
